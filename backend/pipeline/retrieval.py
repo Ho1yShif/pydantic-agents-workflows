@@ -37,7 +37,7 @@ PRODUCT_KEYWORDS = {
     'cron job': ['Render Cron Jobs Pricing'],
 }
 
-# AI/agent keywords that trigger AI agent template injection
+# AI/agent keywords that trigger the Render Workflows agents tutorial injection
 AI_AGENT_KEYWORDS = [
     'ai agent', 'ai agents', 'llm agent', 'llm', 'language model',
     'artificial intelligence', 'machine learning', 'deploy ai', 'deploy agent',
@@ -45,10 +45,18 @@ AI_AGENT_KEYWORDS = [
     'agent workflow', 'agent deployment', 'agentic',
 ]
 
-# Single-word AI keywords matched with word boundaries to avoid false positives
-AI_AGENT_SINGLE_WORD_KEYWORDS = ['agent', 'agents']
+# Single-word AI keywords matched with word boundaries to avoid false positives.
+# 'ai' is matched with word boundaries so it triggers on "ai" but not "email"/"detail".
+AI_AGENT_SINGLE_WORD_KEYWORDS = ['agent', 'agents', 'ai']
 
-AI_AGENT_TEMPLATE_SOURCE = "https://render.com/templates/self-orchestrating-agents-python"
+# For "how do I deploy/run an AI agent on Render?" — and any question mentioning
+# "ai" or "agents" — we inject two authoritative sources, both at top priority:
+#   1. the Workflows agents tutorial (brings home the canonical answer), and
+#   2. the official Workflows docs (gives the verification + accuracy stages
+#      authoritative material to check the generated answer against).
+# The self-orchestrating-agents template is no longer auto-fetched.
+AI_AGENT_WORKFLOWS_SOURCE = "https://render.com/tutorials/agents-on-render-workflows/what-youll-build"
+AI_AGENT_WORKFLOWS_DOCS_SOURCE = "https://render.com/docs/workflows"
 
 # Autoscaling keywords
 AUTOSCALING_KEYWORDS = [
@@ -89,46 +97,59 @@ def detect_ai_agent_query(question: str) -> bool:
 
 async def inject_ai_agent_docs(question: str, existing_docs: List[Document]) -> List[Document]:
     """
-    Explicitly fetch and inject the AI agent template doc when AI/agent keywords detected.
+    Explicitly fetch and inject the Render Workflows agents tutorial AND the
+    official Render Workflows docs when AI/agent keywords are detected.
 
-    Ensures AI agent questions always get the template context, regardless of semantic search.
+    Ensures "how do I deploy/run an AI agent on Render?" — and any question
+    mentioning "ai" or "agents" — always lands on the canonical answer (Render
+    Workflows) and gives the verification/accuracy stages authoritative docs to
+    check the answer against, regardless of semantic search.
     """
     if not detect_ai_agent_query(question):
         return existing_docs
 
-    logfire.info("AI agent query detected, injecting AI agent template doc")
+    logfire.info("AI agent query detected, injecting Render Workflows tutorial + docs")
 
+    # Both sources are injected at top priority. The tutorial comes first so it
+    # leads the context; the docs follow as authoritative verification material.
+    sources = [
+        ("Workflows agents tutorial", AI_AGENT_WORKFLOWS_SOURCE, "data/scripts/add_workflows_tutorial_page.py"),
+        ("Workflows docs", AI_AGENT_WORKFLOWS_DOCS_SOURCE, "data/scripts/add_workflows_docs_page.py"),
+    ]
+
+    injected_docs = []
     async with vector_store.pool.acquire() as conn:
-        row = await conn.fetchrow("""
-            SELECT content, source, title, section, metadata, embedding
-            FROM documents
-            WHERE source = $1
-            LIMIT 1
-        """, AI_AGENT_TEMPLATE_SOURCE)
+        for label, source, script in sources:
+            row = await conn.fetchrow("""
+                SELECT content, source, title, section, metadata, embedding
+                FROM documents
+                WHERE source = $1
+                LIMIT 1
+            """, source)
 
-    if row:
-        metadata = row['metadata']
-        if isinstance(metadata, str):
-            metadata = json.loads(metadata)
-        elif metadata is None:
-            metadata = {}
+            if row:
+                metadata = row['metadata']
+                if isinstance(metadata, str):
+                    metadata = json.loads(metadata)
+                elif metadata is None:
+                    metadata = {}
 
-        doc = Document(
-            content=row['content'],
-            source=row['source'],
-            metadata={
-                'title': row['title'],
-                'section': row['section'] or row['title'],
-                **metadata
-            },
-            similarity_score=0.95
-        )
-        logfire.info("Injected AI agent template document")
-        return [doc] + existing_docs
+                injected_docs.append(Document(
+                    content=row['content'],
+                    source=row['source'],
+                    metadata={
+                        'title': row['title'],
+                        'section': row['section'] or row['title'],
+                        **metadata
+                    },
+                    similarity_score=0.95
+                ))
+                logfire.info(f"Injected {label} document")
+            else:
+                logfire.warning(f"{label} doc not found in DB — run {script}")
 
-    logfire.warning(
-        "AI agent template doc not found in DB — run data/scripts/add_ai_agent_template_page.py"
-    )
+    if injected_docs:
+        return injected_docs + existing_docs
     return existing_docs
 
 
@@ -458,13 +479,13 @@ async def retrieve_documents(embedding: List[float], original_question: str = No
                 total_docs=len(documents)
             )
 
-    # AI AGENT INJECTION: If AI/agent keywords detected, inject voice agent template doc
+    # AI AGENT INJECTION: If AI/agent keywords detected, inject the Render Workflows tutorial doc
     if original_question:
         pre_injection_count = len(documents)
         documents = await inject_ai_agent_docs(original_question, documents)
         if len(documents) > pre_injection_count:
             logfire.info(
-                "Injected AI agent template doc",
+                "Injected Render Workflows agents tutorial doc",
                 total_docs=len(documents)
             )
 

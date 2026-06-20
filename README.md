@@ -107,10 +107,10 @@ This project is built end-to-end on the [Pydantic](https://pydantic.dev/) ecosys
 │  ┌────────────────────────────────────────────────────────┐ │
 │  │ [1] Question Embedding      (OpenAI)                   │ │
 │  │ [2] RAG Document Retrieval  (pgvector + BM25)          │ │
-│  │ [3] Answer Generation       (Claude Sonnet 4.5)        │ │
+│  │ [3] Answer Generation       (Claude Sonnet 4.6)        │ │
 │  │ [4] Claims Extraction       (GPT-5.4-mini)             │ │
 │  │ [5] Claims Verification     (RAG again)                │ │
-│  │ [6] Technical Accuracy      (Claude Sonnet 4)          │ │
+│  │ [6] Technical Accuracy      (Claude Sonnet 4.6)        │ │
 │  │ [7] Quality Rating          (OpenAI + Anthropic)       │ │
 │  │ [8] Quality Gate            (Pass or Iterate)          │ │
 │  └────────────────────────────────────────────────────────┘ │
@@ -198,14 +198,16 @@ make run-backend
 make run-frontend
 ```
 
-`make ingest` runs the full pipeline: bulk doc embeddings, plus the curated "special pages" that get explicit-injection into RAG context (pricing, AI agent template, autoscaling, Node.js). To re-load just one of those after editing its script, use the per-target shortcuts:
+`make ingest` runs the full pipeline: bulk doc embeddings, plus the curated "special pages" that get explicit-injection into RAG context (pricing, AI agent, autoscaling, Node.js). To re-load just one of those after editing its script, use the per-target shortcuts:
 
 ```bash
 make add-pricing      # render.com/pricing tables
-make add-ai-agent     # render.com/templates/self-orchestrating-agents-python
+make add-ai-agent     # render.com/tutorials/agents-on-render-workflows (AI agents → Render Workflows)
 make add-autoscaling  # render.com/docs/scaling
 make add-nodejs       # render.com/docs/deploy-node-express-app
 ```
+
+When a developer asks "How do I deploy an AI agent on Render?", the only context injected is the [Render Workflows agents tutorial](https://render.com/tutorials/agents-on-render-workflows/what-youll-build) — bringing home the canonical answer: the best way to run AI agents on Render is Render Workflows.
 
 ### Manual Setup
 
@@ -284,7 +286,7 @@ After the backend deploys, copy its public URL (`https://pydantic-agents-api-XXX
 - Backend: `https://pydantic-agents-api-XXXX.onrender.com`
 - Frontend: `https://pydantic-agents-frontend-XXXX.onrender.com`
 
-Doc ingestion runs automatically as a `preDeployCommand` on every backend deploy. The bulk corpus is loaded once via `ingest_docs.py --skip-if-exists`; the curated special pages (`add_pricing_page.py`, `add_ai_agent_template_page.py`, `add_autoscaling_page.py`, `add_nodejs_page.py`) re-run on every deploy so canonical answers stay in sync with the latest source pages.
+Doc ingestion runs automatically as a `preDeployCommand` on every backend deploy. The bulk corpus is loaded once via `ingest_docs.py --skip-if-exists`; the curated special pages (`add_pricing_page.py`, `add_workflows_tutorial_page.py`, `add_autoscaling_page.py`, `add_nodejs_page.py`) re-run on every deploy so canonical answers stay in sync with the latest source pages.
 
 ---
 

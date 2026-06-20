@@ -54,11 +54,11 @@ EMBEDDING_MODEL=text-embedding-3-small   # OpenAI embedding model
 EMBEDDING_DIMENSIONS=1536                # Embedding vector dimensions
 
 # Model Selection
-ANSWER_MODEL=claude-sonnet-4-5-20250929  # Primary answer generation model
+ANSWER_MODEL=claude-sonnet-4-6  # Primary answer generation model
 CLAIMS_MODEL=gpt-5.4-mini                # Claims extraction model
-ACCURACY_MODEL=claude-sonnet-4-20250514  # Accuracy checking model
+ACCURACY_MODEL=claude-sonnet-4-6  # Accuracy checking model
 EVAL_MODEL_OPENAI=gpt-5.4-mini           # OpenAI evaluator model
-EVAL_MODEL_ANTHROPIC=claude-sonnet-4-20250514  # Anthropic evaluator model
+EVAL_MODEL_ANTHROPIC=claude-sonnet-4-6  # Anthropic evaluator model
 
 # Performance Settings
 TIMEOUT_SECONDS=30                       # Per-stage timeout
@@ -97,10 +97,10 @@ class PipelineConfig:
     EMBEDDING_DIMENSIONS = 1536
     
     # Model selection
-    ANSWER_MODEL = "claude-sonnet-4-5-20250929"
+    ANSWER_MODEL = "claude-sonnet-4-6"
     CLAIMS_MODEL = "gpt-5.4-mini"
-    ACCURACY_MODEL = "claude-sonnet-4-20250514"
-    EVAL_MODELS = ["gpt-5.4-mini", "claude-sonnet-4-20250514"]
+    ACCURACY_MODEL = "claude-sonnet-4-6"
+    EVAL_MODELS = ["gpt-5.4-mini", "claude-sonnet-4-6"]
 ```
 
 ---
@@ -126,39 +126,38 @@ class PipelineConfig:
 #### Anthropic Models
 
 ```python
-"claude-sonnet-4-5-20250929"  # Latest Sonnet, best quality
-"claude-sonnet-4-20250514"    # Previous Sonnet version
-"claude-haiku-4"              # Fast and cheap
-"claude-opus-4"               # Most capable, most expensive
+"claude-opus-4-8"             # Most capable, most expensive
+"claude-sonnet-4-6"           # Latest Sonnet, best balance (default)
+"claude-haiku-4-5"            # Fast and cheap
 ```
 
 ### Model Selection Strategy
 
 **Cost-Optimized:**
 ```python
-ANSWER_MODEL = "claude-haiku-4"          # Cheapest Claude
+ANSWER_MODEL = "claude-haiku-4-5"          # Cheapest Claude
 CLAIMS_MODEL = "gpt-3.5-turbo"           # Cheapest OpenAI
 ACCURACY_MODEL = "gpt-5.4-mini"          # Balance
 EVAL_MODEL_OPENAI = "gpt-3.5-turbo"
-EVAL_MODEL_ANTHROPIC = "claude-haiku-4"
+EVAL_MODEL_ANTHROPIC = "claude-haiku-4-5"
 ```
 
 **Quality-Optimized:**
 ```python
-ANSWER_MODEL = "claude-opus-4"           # Best Anthropic
+ANSWER_MODEL = "claude-opus-4-8"           # Best Anthropic
 CLAIMS_MODEL = "gpt-5.4-mini"            # Best OpenAI for structured output
-ACCURACY_MODEL = "claude-sonnet-4-5-20250929"
+ACCURACY_MODEL = "claude-sonnet-4-6"
 EVAL_MODEL_OPENAI = "gpt-5.4-mini"
-EVAL_MODEL_ANTHROPIC = "claude-opus-4"
+EVAL_MODEL_ANTHROPIC = "claude-opus-4-8"
 ```
 
 **Balanced (Default):**
 ```python
-ANSWER_MODEL = "claude-sonnet-4-5-20250929"  # Good balance
+ANSWER_MODEL = "claude-sonnet-4-6"  # Good balance
 CLAIMS_MODEL = "gpt-5.4-mini"                # Fast and cheap
-ACCURACY_MODEL = "claude-sonnet-4-20250514"  # Reliable
+ACCURACY_MODEL = "claude-sonnet-4-6"  # Reliable
 EVAL_MODEL_OPENAI = "gpt-5.4-mini"
-EVAL_MODEL_ANTHROPIC = "claude-sonnet-4-20250514"
+EVAL_MODEL_ANTHROPIC = "claude-sonnet-4-6"
 ```
 
 ---
@@ -265,7 +264,7 @@ MAX_TOKENS = 1500  # Down from 2000
 RAG_TOP_K = 5  # Down from 10
 
 # Use faster models
-ANSWER_MODEL = "claude-haiku-4"  # Faster than Sonnet
+ANSWER_MODEL = "claude-haiku-4-5"  # Faster than Sonnet
 
 # Disable less critical stages (not recommended)
 ENABLE_CLAIMS_VERIFICATION = False
@@ -276,7 +275,7 @@ ENABLE_ACCURACY_CHECK = False
 
 ```python
 # Use cheaper models
-ANSWER_MODEL = "claude-haiku-4"
+ANSWER_MODEL = "claude-haiku-4-5"
 CLAIMS_MODEL = "gpt-3.5-turbo"
 ACCURACY_MODEL = "gpt-5.4-mini"
 
@@ -298,9 +297,9 @@ CACHE_TTL_SECONDS = 3600  # 1 hour
 
 ```python
 # Use best models
-ANSWER_MODEL = "claude-opus-4"
+ANSWER_MODEL = "claude-opus-4-8"
 CLAIMS_MODEL = "gpt-5.4-mini"
-ACCURACY_MODEL = "claude-sonnet-4-5-20250929"
+ACCURACY_MODEL = "claude-sonnet-4-6"
 
 # Increase token limits
 MAX_TOKENS = 3000
@@ -343,7 +342,7 @@ SIMILARITY_THRESHOLD = 0.70
 **Costs too high:**
 ```python
 # Use cheaper models
-ANSWER_MODEL = "claude-haiku-4"
+ANSWER_MODEL = "claude-haiku-4-5"
 CLAIMS_MODEL = "gpt-3.5-turbo"
 
 # Reduce iterations
@@ -357,7 +356,7 @@ MAX_TOKENS = 1000
 **Low quality scores:**
 ```python
 # Use better models
-ANSWER_MODEL = "claude-sonnet-4-5-20250929"
+ANSWER_MODEL = "claude-sonnet-4-6"
 
 # More context
 RAG_TOP_K = 15

@@ -99,7 +99,7 @@ For a technical deep-dive on hybrid search implementation, see [HYBRID_SEARCH.md
 
 **Purpose:** Generate comprehensive answer using retrieved context
 
-**Model:** Claude Sonnet 4.5
+**Model:** Claude Sonnet 4.6
 
 **Context:** RAG documents + conversation history
 
@@ -166,7 +166,7 @@ async def generate_answer(question: str, context: str) -> dict:
 
 **Purpose:** Deep accuracy validation using Claude
 
-**Model:** Claude Sonnet 4
+**Model:** Claude Sonnet 4.6
 
 **Input:** Original answer + claims + verification results
 
@@ -183,7 +183,7 @@ async def generate_answer(question: str, context: str) -> dict:
 
 **Purpose:** Independent quality assessment from two models
 
-**Models:** OpenAI GPT-4o-mini + Anthropic Claude Sonnet 4
+**Models:** OpenAI GPT-4o-mini + Anthropic Claude Sonnet 4.6
 
 **Criteria:**
 - Technical accuracy (30%)

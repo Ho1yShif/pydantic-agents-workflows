@@ -16,7 +16,7 @@ help:
 	@echo "  make db-reset      - Reset database (delete all data)"
 	@echo "  make ingest        - Generate embeddings and load into database (includes all special pages)"
 	@echo "  make add-pricing   - Re-add only the pricing page"
-	@echo "  make add-ai-agent  - Re-add only the AI agent (self-orchestrating-agents) template"
+	@echo "  make add-ai-agent  - Re-add only the AI agent answer (Render Workflows tutorial)"
 	@echo "  make add-autoscaling - Re-add only the autoscaling docs"
 	@echo "  make add-nodejs    - Re-add only the Node.js docs"
 	@echo ""
@@ -41,8 +41,8 @@ dev-setup: install
 	@echo ""
 	@echo "⚙️  Setting up development environment..."
 	@if [ ! -f .env ]; then \
-		cp .env.local .env; \
-		echo "📝 Created .env file from .env.local"; \
+		cp .env.example .env; \
+		echo "📝 Created .env file from .env.example"; \
 		echo "⚠️  Please edit .env and add your API keys!"; \
 	else \
 		echo "✅ .env file already exists"; \
@@ -88,7 +88,8 @@ ingest:
 	@echo ""
 	@echo "🏷️  Adding special pages (pricing, AI agent, autoscaling, Node.js)..."
 	uv run python data/scripts/add_pricing_page.py
-	uv run python data/scripts/add_ai_agent_template_page.py
+	uv run python data/scripts/add_workflows_tutorial_page.py
+	uv run python data/scripts/add_workflows_docs_page.py
 	uv run python data/scripts/add_autoscaling_page.py
 	uv run python data/scripts/add_nodejs_page.py
 	@echo "✅ Documentation ingested!"
@@ -101,11 +102,12 @@ add-pricing:
 	@echo "✅ Pricing data added!"
 
 add-ai-agent:
-	@echo "🤖 Adding self-orchestrating-agents template page to vector database..."
-	@echo "This ensures AI agent deployment questions get the right context"
+	@echo "🤖 Adding Render Workflows agents tutorial + docs to vector database..."
+	@echo "This ensures 'how do I deploy an AI agent on Render?' answers with Workflows"
 	@echo ""
-	uv run python data/scripts/add_ai_agent_template_page.py
-	@echo "✅ AI agent template added!"
+	uv run python data/scripts/add_workflows_tutorial_page.py
+	uv run python data/scripts/add_workflows_docs_page.py
+	@echo "✅ AI agent (Workflows tutorial + docs) context added!"
 
 add-autoscaling:
 	@echo "📈 Adding autoscaling documentation to vector database..."
