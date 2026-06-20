@@ -1,13 +1,16 @@
 """API endpoint for fetching Logfire logs."""
 
+from datetime import datetime, timedelta, timezone
+
 import httpx
 from fastapi import HTTPException
 import logfire
 
 from backend.config import settings
 
-
-LOGFIRE_API_BASE = "https://logfire-us.pydantic.dev"  # Use logfire-eu.pydantic.dev for EU region
+# How far back to scope the query. The trace_id WHERE clause already pins the
+# results to one trace; this window just needs to comfortably contain it.
+LOGFIRE_QUERY_WINDOW_DAYS = 7
 
 
 async def fetch_logfire_logs(trace_id: str) -> dict:
@@ -29,11 +32,11 @@ async def fetch_logfire_logs(trace_id: str) -> dict:
             detail="Logfire read token not configured. Set LOGFIRE_READ_TOKEN environment variable."
         )
     
-    # SQL query to fetch all records for this trace
-    # Logfire stores data in the 'records' table
-    # See: https://logfire.pydantic.dev/docs/how-to-guides/query-api/
+    # SQL query to fetch all records for this trace.
+    # Logfire stores spans and logs in the 'records' table.
+    # See: https://pydantic.dev/docs/logfire/manage/query-api/
     query = f"""
-        SELECT 
+        SELECT
             start_timestamp,
             message,
             level,
@@ -48,20 +51,32 @@ async def fetch_logfire_logs(trace_id: str) -> dict:
         ORDER BY start_timestamp ASC
         LIMIT 1000
     """
-    
+
+    # The Query API requires min_timestamp and applies its own row limit
+    # (default 100), independent of the SQL LIMIT.
+    min_timestamp = (
+        datetime.now(timezone.utc) - timedelta(days=LOGFIRE_QUERY_WINDOW_DAYS)
+    ).isoformat()
+    body = {
+        "sql": query,
+        "min_timestamp": min_timestamp,
+        "limit": 1000,
+    }
+
     headers = {
         "Authorization": f"Bearer {settings.logfire_read_token}",
-        "Content-Type": "application/json"
+        "Accept": "application/json",
+        "Content-Type": "application/json",
     }
-    
+
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                f"{LOGFIRE_API_BASE}/v1/query",
-                params={"sql": query},
+            response = await client.post(
+                f"{settings.logfire_api_base}/v2/query",
+                json=body,
                 headers=headers
             )
-            
+
             if response.status_code == 401:
                 raise HTTPException(status_code=401, detail="Invalid Logfire read token")
             elif response.status_code == 403:
@@ -72,35 +87,39 @@ async def fetch_logfire_logs(trace_id: str) -> dict:
                     status_code=response.status_code,
                     detail=f"Logfire API error: {response.text}"
                 )
-            
+
             data = response.json()
-            
-            # Logfire returns data in columnar format, need to convert to rows
-            columns = data.get("columns", [])
-            
-            # Transform columnar format to row format
-            rows = []
-            if columns:
-                # Get the number of rows from the first column's values
-                num_rows = len(columns[0].get("values", []))
-                
-                # Transpose columnar data to row format
-                for i in range(num_rows):
-                    row = {}
-                    for col in columns:
-                        col_name = col.get("name")
-                        values = col.get("values", [])
-                        row[col_name] = values[i] if i < len(values) else None
-                    rows.append(row)
-            
+
+            # v2 JSON returns row objects under "data" (with a "schema" sibling).
+            # Fall back to "rows", then to the legacy columnar "columns" shape so
+            # this keeps working across API/format variations.
+            rows = data.get("data")
+            if rows is None:
+                rows = data.get("rows")
+            if rows is None:
+                columns = data.get("columns", [])
+                rows = []
+                if columns:
+                    num_rows = len(columns[0].get("values", []))
+                    for i in range(num_rows):
+                        row = {
+                            col.get("name"): (
+                                col.get("values", [])[i]
+                                if i < len(col.get("values", []))
+                                else None
+                            )
+                            for col in columns
+                        }
+                        rows.append(row)
+
             logfire.info(f"Fetched {len(rows)} log records for trace {trace_id}")
-            
+
             return {
                 "trace_id": trace_id,
                 "logs": rows,
                 "record_count": len(rows)
             }
-            
+
     except httpx.TimeoutException:
         logfire.error(f"Timeout fetching logs for trace {trace_id}")
         raise HTTPException(status_code=504, detail="Logfire API timeout")

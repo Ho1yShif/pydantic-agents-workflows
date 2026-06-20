@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     anthropic_api_key: str
     logfire_token: str
     logfire_read_token: str = ""  # Optional: for fetching logs via API
+    # Logfire Query API base URL. Use https://logfire-eu.pydantic.dev for EU-region projects.
+    logfire_api_base: str = "https://logfire-us.pydantic.dev"
     
     # Database
     database_url: str
