@@ -10,6 +10,9 @@ import os
 import re
 from dotenv import load_dotenv
 
+from chunking import chunk_document
+from crawl_tutorials import fetch_tutorial_docs
+
 # Load environment variables
 load_dotenv()
 
@@ -73,56 +76,23 @@ async def fetch_render_docs() -> List[Dict]:
             
             # Clean up the content
             clean_content = subsection.strip()
-            
+
             # Skip very small chunks
             if len(clean_content) < 100:
                 continue
-            
+
             # Exclude blog posts and articles (focus on technical docs only)
             if any(keyword in title.lower() for keyword in ['blog', 'article', 'changelog']):
                 excluded_count += 1
                 continue
-            
+
             # Limit chunk size to ~2000 characters for better embedding quality
-            if len(clean_content) > 2000:
-                # Split into smaller chunks at paragraph boundaries
-                paragraphs = clean_content.split('\n\n')
-                current_chunk = []
-                current_length = 0
-                
-                for para in paragraphs:
-                    para_length = len(para)
-                    if current_length + para_length > 2000 and current_chunk:
-                        # Save current chunk
-                        chunk_content = '\n\n'.join(current_chunk)
-                        docs.append({
-                            "title": title if not section_name else f"{title} - {section_name}",
-                            "section": section_name or title,
-                            "source": source_url,
-                            "content": chunk_content
-                        })
-                        current_chunk = [para]
-                        current_length = para_length
-                    else:
-                        current_chunk.append(para)
-                        current_length += para_length + 2  # +2 for \n\n
-                
-                # Add remaining chunk
-                if current_chunk:
-                    chunk_content = '\n\n'.join(current_chunk)
-                    docs.append({
-                        "title": title if not section_name else f"{title} - {section_name}",
-                        "section": section_name or title,
-                        "source": source_url,
-                        "content": chunk_content
-                    })
-            else:
-                docs.append({
-                    "title": title if not section_name else f"{title} - {section_name}",
-                    "section": section_name or title,
-                    "source": source_url,
-                    "content": clean_content
-                })
+            docs.extend(chunk_document(
+                title=title,
+                section=section_name,
+                source=source_url,
+                content=clean_content,
+            ))
     
     print(f"✅ Parsed into {len(docs)} documentation chunks")
     if excluded_count > 0:
@@ -861,7 +831,17 @@ async def main():
         print(f"\n⚠️  Error fetching documentation: {e}")
         print("Falling back to sample documentation...")
         docs = await fetch_render_docs_sample()
-    
+
+    # Crawl the Tutorials section (not included in llms-full.txt) and append it.
+    print("\n📚 Crawling render.com/tutorials...")
+    try:
+        tutorial_docs = await fetch_tutorial_docs()
+        docs.extend(tutorial_docs)
+        print(f"➕ Added {len(tutorial_docs)} tutorial chunks")
+    except Exception as e:
+        print(f"\n⚠️  Error crawling tutorials: {e}")
+        print("Continuing without tutorial content...")
+
     print(f"\n📊 Processing {len(docs)} documentation chunks")
     
     print("\n🔄 Generating embeddings with OpenAI...")

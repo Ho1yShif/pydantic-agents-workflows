@@ -77,6 +77,10 @@ NODEJS_KEYWORDS = [
 NODEJS_SINGLE_WORD_KEYWORDS = ['node']
 NODEJS_DOC_SOURCE = "https://render.com/docs/deploy-node-express-app"
 
+# Tutorials keywords that trigger the render.com/tutorials index recommendation
+TUTORIALS_KEYWORDS = ['tutorial', 'tutorials']
+TUTORIALS_INDEX_SOURCE = "https://render.com/tutorials"
+
 
 def detect_ai_agent_query(question: str) -> bool:
     """Detect if the question is asking about AI agents or long-running agent processes."""
@@ -267,6 +271,62 @@ async def inject_nodejs_docs(question: str, existing_docs: List[Document]) -> Li
 
     logfire.warning(
         "Node.js deployment doc not found in DB — run data/scripts/add_nodejs_page.py"
+    )
+    return existing_docs
+
+
+def detect_tutorials_query(question: str) -> bool:
+    """Detect if the question mentions tutorials."""
+    question_lower = question.lower()
+    return any(
+        re.search(r'\b' + re.escape(keyword) + r'\b', question_lower)
+        for keyword in TUTORIALS_KEYWORDS
+    )
+
+
+async def inject_tutorials_docs(question: str, existing_docs: List[Document]) -> List[Document]:
+    """
+    Explicitly fetch and inject the Render Tutorials index document when the word
+    "tutorials" is mentioned.
+
+    Ensures questions about tutorials always recommend render.com/tutorials,
+    regardless of semantic search.
+    """
+    if not detect_tutorials_query(question):
+        return existing_docs
+
+    logfire.info("Tutorials query detected, injecting render.com/tutorials index doc")
+
+    async with vector_store.pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT content, source, title, section, metadata, embedding
+            FROM documents
+            WHERE source = $1
+            LIMIT 1
+        """, TUTORIALS_INDEX_SOURCE)
+
+    if row:
+        metadata = row['metadata']
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+        elif metadata is None:
+            metadata = {}
+
+        doc = Document(
+            content=row['content'],
+            source=row['source'],
+            metadata={
+                'title': row['title'],
+                'section': row['section'] or row['title'],
+                **metadata
+            },
+            similarity_score=0.95
+        )
+        logfire.info("Injected Render Tutorials index document")
+        return [doc] + existing_docs
+
+    logfire.warning(
+        "Tutorials index doc not found in DB — run data/scripts/add_tutorials_index_page.py"
     )
     return existing_docs
 
@@ -506,6 +566,16 @@ async def retrieve_documents(embedding: List[float], original_question: str = No
         if len(documents) > pre_injection_count:
             logfire.info(
                 "Injected Node.js deployment doc",
+                total_docs=len(documents)
+            )
+
+    # TUTORIALS INJECTION: If "tutorials" mentioned, recommend render.com/tutorials
+    if original_question:
+        pre_injection_count = len(documents)
+        documents = await inject_tutorials_docs(original_question, documents)
+        if len(documents) > pre_injection_count:
+            logfire.info(
+                "Injected Render Tutorials index doc",
                 total_docs=len(documents)
             )
 

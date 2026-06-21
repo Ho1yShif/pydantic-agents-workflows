@@ -20,7 +20,7 @@ projects:
             plan: starter
             region: oregon
             buildCommand: uv sync --no-dev --frozen
-            preDeployCommand: uv run python data/scripts/ingest_docs.py --skip-if-exists && uv run python data/scripts/add_pricing_page.py && uv run python data/scripts/add_workflows_tutorial_page.py && uv run python data/scripts/add_workflows_docs_page.py && uv run python data/scripts/add_autoscaling_page.py && uv run python data/scripts/add_nodejs_page.py
+            preDeployCommand: uv run python data/scripts/ingest_docs.py --sync && uv run python data/scripts/add_pricing_page.py && uv run python data/scripts/add_workflows_tutorial_page.py && uv run python data/scripts/add_workflows_docs_page.py && uv run python data/scripts/add_autoscaling_page.py && uv run python data/scripts/add_nodejs_page.py && uv run python data/scripts/add_tutorials_index_page.py
             startCommand: uv run uvicorn backend.main:app --host 0.0.0.0 --port $PORT
             healthCheckPath: /health
             envVars:
