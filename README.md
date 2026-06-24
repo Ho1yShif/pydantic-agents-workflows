@@ -29,7 +29,7 @@ This is an **AI-powered Q&A assistant for Render documentation**. Users can ask 
 ### User Experience
 
 1. **Ask a question** - "How do I deploy a Node.js app on Render?" or "What database plans are available?"
-2. **Watch the pipeline** - See real-time progress through 8 stages (embedding → retrieval → generation → verification)
+2. **Watch the pipeline** - Track progress as the run moves through 8 stages (embedding → retrieval → generation → verification)
 3. **Get accurate answers** - Receive detailed responses with sources from Render docs
 4. **Quality guaranteed** - Every answer is verified for accuracy and rated by dual AI evaluators
 
@@ -39,7 +39,7 @@ This is an **AI-powered Q&A assistant for Render documentation**. Users can ask 
 - **Multi-stage verification** - Extracts claims, verifies against docs, checks technical accuracy
 - **Iterative refinement** - Automatically regenerates low-quality answers with feedback
 - **Cost tracking** - See exactly how much each question costs to answer
-- **Real-time streaming** - Progressive response updates via Server-Sent Events
+- **Parallel fan-out** - The pipeline runs on [Render Workflows](https://render.com/docs/workflows), fanning out the heaviest stages (technical accuracy + dual-model evaluation) across instances so they execute concurrently
 
 ### Example Questions
 
@@ -82,7 +82,9 @@ This project is built end-to-end on the [Pydantic](https://pydantic.dev/) ecosys
 
 - **Zero-Config Deployment** - Push to deploy with render.yaml
 - **PostgreSQL with pgvector + full-text** - Managed hybrid search database
-- **Web Service + Static Site** - Full-stack deployment
+- **Render Workflows** - The Q&A pipeline and ingestion run as durable workflow tasks with per-task retries, timeouts, and cross-instance parallel fan-out
+- **Web Service + Static Site** - FastAPI gateway + Next.js frontend
+- **Cron Jobs** - Scheduled ingestion refresh that triggers the workflow fan-out
 - **Environment Management** - Secure secrets handling
 - **Auto-Scaling** - Handle variable AI workloads
 
@@ -90,30 +92,43 @@ This project is built end-to-end on the [Pydantic](https://pydantic.dev/) ecosys
 
 ## Architecture
 
+The pipeline no longer runs inside the web service. The web service is now a **thin
+FastAPI gateway** that triggers a **Render Workflows** run and polls it for the result;
+the 8-stage pipeline and ingestion execute as workflow tasks that fan out across instances.
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Frontend (React + TypeScript)                              │
+│  Frontend (Next.js + TypeScript)                            │
 │  Deployed as: Render Static Site                            │
 │  - Question input UI                                        │
-│  - Real-time progress via SSE                               │
+│  - Progress via polling (POST /ask → poll GET /ask/{id})    │
 │  - Answer display with metrics                              │
 └─────────────────────────────────────────────────────────────┘
                           ↓ HTTPS
 ┌─────────────────────────────────────────────────────────────┐
-│  Backend API (FastAPI + Pydantic AI + Logfire)              │
+│  API Gateway (FastAPI + Logfire)                            │
 │  Deployed as: Render Web Service (Python 3.13)              │
-│                                                             │
-│  8-Stage Pipeline:                                          │
+│  - POST /ask        → start_task("…/run_qa_pipeline")       │
+│  - GET  /ask/{id}   → get_task_run(id) (poll status/result) │
+│  - /health, /history, /stats, /sessions/{id}/logs           │
+└─────────────────────────────────────────────────────────────┘
+            ↓ Render SDK (start_task / get_task_run)
+┌─────────────────────────────────────────────────────────────┐
+│  Render Workflows service  (Python 3.13)                    │
+│  Orchestrator: run_qa_pipeline                              │
 │  ┌────────────────────────────────────────────────────────┐ │
-│  │ [1] Question Embedding      (OpenAI)                   │ │
-│  │ [2] RAG Document Retrieval  (pgvector + BM25)          │ │
-│  │ [3] Answer Generation       (Claude Sonnet 4.6)        │ │
-│  │ [4] Claims Extraction       (GPT-5.4-mini)             │ │
-│  │ [5] Claims Verification     (RAG again)                │ │
-│  │ [6] Technical Accuracy      (Claude Sonnet 4.6)        │ │
-│  │ [7] Quality Rating          (OpenAI + Anthropic)       │ │
-│  │ [8] Quality Gate            (Pass or Iterate)          │ │
+│  │ [1] Question Embedding      (OpenAI)        in-process  │ │
+│  │ [2] RAG Document Retrieval  (pgvector+BM25) in-process  │ │
+│  │ [3] Answer Generation       (Claude)        ⟶ subtask   │ │
+│  │ [4] Claims Extraction       (GPT)           ⟶ subtask   │ │
+│  │ [5] Claims Verification     (RAG again)     ⟶ subtask   │ │
+│  │ [6] Technical Accuracy      (Claude)    ┐               │ │
+│  │ [7] Quality Rating          (OpenAI+    ├─ 3 parallel   │ │
+│  │                              Anthropic) ┘   subtasks    │ │
+│  │ [8] Quality Gate            (Pass or Iterate) in-process │ │
 │  └────────────────────────────────────────────────────────┘ │
+│  Ingestion: ingest_all → ingest_core, then 6 add_* in       │
+│             parallel (replaces the old serial preDeploy)    │
 └─────────────────────────────────────────────────────────────┘
             ↓                                    ↓
 ┌──────────────────────┐           ┌───────────────────────────┐
@@ -124,26 +139,36 @@ This project is built end-to-end on the [Pydantic](https://pydantic.dev/) ecosys
 │  - Full-text search  │           │  - Quality metrics        │
 └──────────────────────┘           │  - Custom dashboards      │
                                    └───────────────────────────┘
+
+  Cron (daily) ─ start_task("…/ingest_all") ─▶ Workflows service
 ```
+
+> **Why hybrid?** Workflows aren't HTTP-facing, so a client (the gateway) triggers tasks
+> via the SDK and reads run status. Stages 1, 2, and 8 are cheap/data-dependent and stay
+> in-process on the orchestrator; only the heavy, independently-retryable LLM stages are
+> promoted to their own tasks. Stages 6 + 7 run as three concurrent subtasks on separate
+> instances. See [`workflows/app.py`](./workflows/app.py).
 
 ### Project Structure
 
 ```
 render-qa-assistant/
 ├── backend/
-│   ├── main.py                    # FastAPI application entry
-│   ├── requirements.txt           # Legacy pip dependencies (reference only)
+│   ├── main.py                    # FastAPI gateway (triggers + polls workflow runs)
 │   ├── api/
 │   │   └── logs.py                # Logfire logs API endpoint
-│   ├── pipeline/                  # 8-stage pipeline implementation
+│   ├── pipeline/                  # 8-stage pipeline implementation (reused by workflows)
 │   ├── models.py                  # Pydantic models
 │   ├── database.py                # PostgreSQL + pgvector
 │   ├── observability.py           # Logfire configuration
 │   └── config.py                  # Settings management
+├── workflows/                     # Render Workflows service
+│   ├── app.py                     # Workflows() instance + all @app.task defs
+│   ├── serialization.py           # JSON boundary helpers (model_dump/model_validate)
+│   └── trigger_ingest.py          # Cron entrypoint → start_task("…/ingest_all")
 ├── frontend/
-│   ├── src/                       # React + TypeScript UI
-│   ├── package.json
-│   └── vite.config.ts
+│   ├── src/                       # Next.js + TypeScript UI
+│   └── package.json
 ├── data/
 │   ├── embeddings/                # Pre-embedded documentation
 │   └── scripts/                   # Data ingestion scripts
@@ -198,6 +223,35 @@ make run-backend
 make run-frontend
 ```
 
+> **Asking questions locally needs the Workflows runtime running too.** The backend is a thin
+> gateway — `POST /ask` delegates to a Workflows service. With nothing to delegate to it returns
+> `503 WORKFLOW_SLUG is not configured`. You can run the whole stack locally with **no Render
+> cloud resources and no API key** — the pipeline runs on your machine against your local
+> Postgres:
+>
+> ```bash
+> # Terminal 1 — local workflow dev server (loads .env, listens on :8120)
+> render workflows dev -- uv run render-workflows workflows.app:app
+>
+> # Terminal 2 — gateway pointed at the local dev server
+> RENDER_USE_LOCAL_DEV=true WORKFLOW_SLUG=local \
+>   uv run uvicorn backend.main:app --reload --port 8000
+>
+> # Terminal 3 — frontend
+> cd frontend && npm run dev
+> ```
+>
+> `RENDER_USE_LOCAL_DEV=true` makes the SDK target `http://localhost:8120` (the dev server)
+> instead of Render's cloud, with no token required. `WORKFLOW_SLUG=local` can be any non-empty
+> value — it just satisfies the gateway's guard; the dev server resolves the task by name. Set
+> both in your `.env` to avoid prefixing each command. Because the workflow runs locally against
+> the same `DATABASE_URL`, the **History** tab populates normally.
+>
+> *(Alternatively, point the local gateway at a deployed cloud Workflows service by setting
+> `RENDER_API_KEY` + the real `WORKFLOW_SLUG` instead of `RENDER_USE_LOCAL_DEV`. In that case the
+> cloud workflow writes to its own database, so local History only matches if the gateway uses
+> that same database.)*
+
 `make ingest` runs the full pipeline: bulk doc embeddings, plus the curated "special pages" that get explicit-injection into RAG context (pricing, AI agent, autoscaling, Node.js). To re-load just one of those after editing its script, use the per-target shortcuts:
 
 ```bash
@@ -226,12 +280,16 @@ docker-compose up -d
 uv run python data/scripts/generate_embeddings.py
 uv run python data/scripts/ingest_docs.py
 
-# 5. Run backend (from project root)
+# 5. Run backend gateway (from project root)
 uv run uvicorn backend.main:app --reload --port 8000
 
 # 6. Run frontend (separate terminal)
 cd frontend && npm install && npm run dev
 ```
+
+> **Note:** asking questions through the UI also needs the Workflows runtime running (e.g.
+> `render workflows dev …` with `RENDER_USE_LOCAL_DEV=true`) — see
+> [the local-workflows note above](#local-development-with-make).
 
 **Access locally:**
 
@@ -261,32 +319,112 @@ You'll paste both into the Render Dashboard in step 3.
 Render reads [`render.yaml`](./render.yaml) and provisions:
 
 - PostgreSQL database with pgvector (`pydantic-agents-db`)
-- Backend API web service (`pydantic-agents-api`, FastAPI + Pydantic AI + Logfire)
+- API gateway web service (`pydantic-agents-api`, FastAPI + Logfire)
+- Ingestion refresh cron (`pydantic-agents-ingest`, triggers the workflow daily)
 - Frontend static site (`pydantic-agents-frontend`, Next.js)
 
-### 3. Fill in environment variables
+> **Note:** Blueprints (`render.yaml`) don't yet support Render Workflows, so the
+> **Workflows service** that runs the pipeline is created separately in step 3.
 
-You'll be prompted only for these four secrets:
+### 3. Create the Workflows service
 
-| Variable | Source |
+Blueprints (`render.yaml`) can't create Workflows yet, so do this once in the Dashboard.
+
+**3a. Open the create form.** In the [Render Dashboard](https://dashboard.render.com), click
+**New → Workflow**. Connect this GitHub repo (or your fork) when prompted.
+
+**3b. Fill in every field exactly as below:**
+
+| Field | Value |
 |---|---|
-| `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com/api-keys) |
-| `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com/settings/keys) |
-| `LOGFIRE_TOKEN` | Logfire write token from step 1 |
-| `LOGFIRE_READ_TOKEN` | Logfire read token from step 1 |
+| **Name** | `pydantic-agents-workflow` (this becomes the workflow slug) |
+| **Project / Environment** | Same project + `production` environment as the rest of the stack |
+| **Language / Runtime** | `Python 3` |
+| **Branch** | `main` (or the branch you deploy) |
+| **Region** | `Oregon` (must match `pydantic-agents-db`) |
+| **Root Directory** | *(leave blank — the repo root)* |
+| **Build Command** | `pip install uv && uv sync --no-dev --frozen` |
+| **Start Command** | `uv run render-workflows workflows.app:app` |
+| **Instance Type** | `Standard` (the tasks are I/O-bound; no need for Pro) |
+
+> **`uv: command not found`?** A hand-created Workflow service doesn't get `uv` pre-installed
+> (unlike Blueprint services), so the build command installs it first with `pip install uv`.
+>
+> **Pin Python to 3.13.** The build may default to a newer Python (e.g. 3.14) and ignore the
+> repo's `.python-version`. Add an env var **`PYTHON_VERSION` = `3.13`** in step 3c so the build
+> matches `uv.lock` and the rest of the stack.
+
+**3c. Add environment variables.** Under **Environment**, add each variable below. The first
+four are **required** — the service crashes on startup without them (they have no defaults in
+[`backend/config.py`](./backend/config.py)). The rest are optional and only override built-in
+defaults.
+
+| Variable | Required? | Value / Source |
+|---|---|---|
+| `DATABASE_URL` | ✅ Required | Click **Add from Database → `pydantic-agents-db`** (already provisioned by step 2's Blueprint — you are *not* creating a new database, just linking the existing one). Use the **same** database as the gateway so the **History** tab populates. |
+| `PYTHON_VERSION` | Recommended | `3.13` (see the build note above) |
+| `OPENAI_API_KEY` | ✅ Required | [platform.openai.com](https://platform.openai.com/api-keys) |
+| `ANTHROPIC_API_KEY` | ✅ Required | [console.anthropic.com](https://console.anthropic.com/settings/keys) |
+| `LOGFIRE_TOKEN` | ✅ Required | Logfire **write** token from step 1 |
+| `LOGFIRE_READ_TOKEN` | Optional | Logfire **read** token from step 1 (enables the logs API) |
+| `QUALITY_THRESHOLD` | Optional | `85` |
+| `ACCURACY_THRESHOLD` | Optional | `70` |
+| `MAX_ITERATIONS` | Optional | `1` |
+| `MAX_TOKENS` | Optional | `2000` |
+| `RAG_TOP_K` | Optional | `20` |
+| `SIMILARITY_THRESHOLD` | Optional | `0.3` |
+| `VERIFICATION_THRESHOLD` | Optional | `0.30` |
+| `ENABLE_CACHING` | Optional | `true` |
+| `LOG_LEVEL` | Optional | `INFO` |
+
+> **You don't need** `RENDER_API_KEY` or `WORKFLOW_SLUG` on the Workflows service — they're only
+> for the gateway/cron that *trigger* it from outside. The workflow fans out its own subtasks over
+> the platform-injected socket, so it never calls the public API. Setting them is harmless (both
+> default to empty in `backend/config.py`), just unnecessary. Likewise, leave the
+> platform-injected `RENDER_SDK_MODE` / `RENDER_SDK_SOCKET_PATH` alone.
+
+**3d. Create the service** and wait for the first deploy to finish. Then copy the service's
+**slug** (shown on its Dashboard page / in its URL, e.g. `pydantic-agents-workflow`) — you'll
+set it as `WORKFLOW_SLUG` on the gateway and cron in step 4.
+
+### 4. Fill in environment variables
+
+The Workflows service keys were set in step 3. The **gateway** and **cron** services are
+prompted for these (the gateway needs the LLM/Logfire keys to boot; both need the workflow
+trigger creds):
+
+| Variable | Service(s) | Source |
+|---|---|---|
+| `OPENAI_API_KEY` | gateway | [platform.openai.com](https://platform.openai.com/api-keys) |
+| `ANTHROPIC_API_KEY` | gateway | [console.anthropic.com](https://console.anthropic.com/settings/keys) |
+| `LOGFIRE_TOKEN` | gateway | Logfire write token from step 1 |
+| `LOGFIRE_READ_TOKEN` | gateway | Logfire read token from step 1 |
+| `RENDER_API_KEY` | gateway + cron | [Render Account Settings → API Keys](https://dashboard.render.com/settings#api-keys) |
+| `WORKFLOW_SLUG` | gateway + cron | The Workflows service slug from step 3 (e.g. `pydantic-agents-workflow`) |
 
 **Auto-filled by Render (no action needed):** `DATABASE_URL` (injected from the database service), `QUALITY_THRESHOLD`, `ACCURACY_THRESHOLD`, `MAX_ITERATIONS`, `MAX_TOKENS`, `RAG_TOP_K`, `SIMILARITY_THRESHOLD`, `VERIFICATION_THRESHOLD`, `ENABLE_CACHING`, `LOG_LEVEL`.
 
-### 4. Wire the frontend to the backend
+### 5. Wire the frontend to the backend
 
-After the backend deploys, copy its public URL (`https://pydantic-agents-api-XXXX.onrender.com`) and set it as the `NEXT_PUBLIC_API_URL` env var on the **frontend** service. Trigger a redeploy of the frontend so the new value takes effect.
+After the gateway deploys, copy its public URL (`https://pydantic-agents-api-XXXX.onrender.com`) and set it as the `NEXT_PUBLIC_API_URL` env var on the **frontend** service. Trigger a redeploy of the frontend so the new value takes effect.
 
-### 5. Done
+### 6. Seed the corpus, then done
 
-- Backend: `https://pydantic-agents-api-XXXX.onrender.com`
+The Workflows service has no documents until ingestion runs. Trigger it once to seed the DB
+(the cron will keep it fresh afterward):
+
+```bash
+render workflows start ingest_all   # or trigger from the Dashboard
+```
+
+- Gateway: `https://pydantic-agents-api-XXXX.onrender.com`
 - Frontend: `https://pydantic-agents-frontend-XXXX.onrender.com`
 
-Doc ingestion runs automatically as a `preDeployCommand` on every backend deploy. The bulk corpus is loaded once via `ingest_docs.py --skip-if-exists`; the curated special pages (`add_pricing_page.py`, `add_workflows_tutorial_page.py`, `add_autoscaling_page.py`, `add_nodejs_page.py`) re-run on every deploy so canonical answers stay in sync with the latest source pages.
+Ingestion now runs as the `ingest_all` workflow task instead of a `preDeployCommand`. It loads
+the bulk corpus first (`ingest_core`), then fans out the curated special pages
+(`add_pricing`, `add_workflows_tutorial`, `add_workflows_docs`, `add_autoscaling`, `add_nodejs`,
+`add_tutorials_index`) in parallel. The `pydantic-agents-ingest` cron re-triggers it daily so
+canonical answers stay in sync with the latest source pages.
 
 ---
 

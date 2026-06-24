@@ -13,6 +13,13 @@ The pipeline processes questions through eight stages, with automatic quality ga
                                                     (iterate if needed)
 ```
 
+The stage logic below lives in [`backend/pipeline/`](../backend/pipeline/) and is unchanged.
+In production it executes as a **Render Workflows** run: the `run_qa_pipeline` orchestrator
+([`workflows/app.py`](../workflows/app.py)) keeps the cheap stages (1, 2, 8) in-process and
+promotes the heavy LLM stages (3, 4, 5) to their own retried subtasks, with stages 6 + 7
+running as three concurrent subtasks on separate instances. See the
+[Architecture section of the README](../README.md#architecture) for the topology.
+
 ---
 
 ## Stage 1: Question Embedding

@@ -2,106 +2,99 @@ import type { AnswerResponse, ProgressUpdate } from '../types'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
+const POLL_INTERVAL_MS = 1500
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms)
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer)
+        reject(new DOMException('Aborted', 'AbortError'))
+      },
+      { once: true }
+    )
+  })
+}
+
+/**
+ * Ask a question via the Workflows-backed pipeline.
+ *
+ * The gateway triggers a Render Workflow run and we poll it for the result.
+ * Token-by-token streaming is no longer available (the pipeline runs
+ * out-of-band in the Workflow service), so `onAnswerToken` is unused and
+ * `onProgress` receives coarse status updates while the run is in flight.
+ */
 export async function askQuestion(
   question: string,
   onProgress?: (update: ProgressUpdate) => void,
-  onAnswerToken?: (delta: string) => void,
+  _onAnswerToken?: (delta: string) => void,
   signal?: AbortSignal
 ): Promise<AnswerResponse> {
-  if (onProgress) {
-    // Use streaming endpoint
-    return askQuestionStream(question, onProgress, onAnswerToken, signal)
-  } else {
-    // Use regular endpoint
-    const response = await fetch(`${API_BASE_URL}/ask`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ question }),
-      signal,
-    })
-
-    if (!response.ok) {
-      throw new Error(`API error: ${response.statusText}`)
-    }
-
-    return response.json()
-  }
-}
-
-async function askQuestionStream(
-  question: string,
-  onProgress: (update: ProgressUpdate) => void,
-  onAnswerToken?: (delta: string) => void,
-  signal?: AbortSignal
-): Promise<AnswerResponse> {
-  const response = await fetch(`${API_BASE_URL}/ask/stream`, {
+  // 1. Trigger the workflow run.
+  const startResponse = await fetch(`${API_BASE_URL}/ask`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ question }),
     signal,
   })
 
-  if (!response.ok) {
-    throw new Error(`API error: ${response.statusText}`)
+  if (!startResponse.ok) {
+    throw new Error(`API error: ${startResponse.statusText}`)
   }
 
-  const reader = response.body?.getReader()
-  if (!reader) {
-    throw new Error('No response body')
-  }
+  const { run_id: runId } = (await startResponse.json()) as { run_id: string }
 
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let finalResult: AnswerResponse | null = null
+  onProgress?.({
+    stage: 'pipeline',
+    status: 'started',
+    message: 'Running the answer pipeline…',
+    progress: 10,
+    cost_so_far: 0,
+  })
 
+  // 2. Poll for completion.
+  let polls = 0
   while (true) {
-    if (signal?.aborted) {
-      reader.cancel()
-      throw new DOMException('Aborted', 'AbortError')
+    await delay(POLL_INTERVAL_MS, signal)
+
+    const pollResponse = await fetch(`${API_BASE_URL}/ask/${runId}`, { signal })
+    if (!pollResponse.ok) {
+      throw new Error(`API error: ${pollResponse.statusText}`)
     }
 
-    const { done, value } = await reader.read()
-
-    if (signal?.aborted) {
-      reader.cancel()
-      throw new DOMException('Aborted', 'AbortError')
+    const data = (await pollResponse.json()) as {
+      status: 'running' | 'done' | 'failed'
+      result?: AnswerResponse
+      error?: string
     }
 
-    if (done) {
-      break
+    if (data.status === 'done' && data.result) {
+      onProgress?.({
+        stage: 'pipeline',
+        status: 'completed',
+        message: 'Answer ready',
+        progress: 100,
+        cost_so_far: data.result.total_cost ?? 0,
+      })
+      return data.result
     }
 
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const data = JSON.parse(line.slice(6))
-        
-        if (data.type === 'complete') {
-          finalResult = data.result
-        } else if (data.type === 'error') {
-          throw new Error(data.message)
-        } else if (data.type === 'answer_token') {
-          onAnswerToken?.(data.delta)
-        } else {
-          // Progress update
-          onProgress(data as ProgressUpdate)
-        }
-      }
+    if (data.status === 'failed') {
+      throw new Error(data.error || 'Pipeline run failed')
     }
+
+    // Still running — nudge the progress bar toward (but never reaching) 90%.
+    polls += 1
+    onProgress?.({
+      stage: 'pipeline',
+      status: 'started',
+      message: 'Running the answer pipeline…',
+      progress: Math.min(10 + polls * 8, 90),
+      cost_so_far: 0,
+    })
   }
-
-  if (!finalResult) {
-    throw new Error('No final result received')
-  }
-
-  return finalResult
 }
 
 export async function checkHealth(): Promise<{ status: string; database_connected: boolean }> {

@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     
     # Database
     database_url: str
+
+    # Render Workflows (gateway -> workflow service)
+    render_api_key: str = ""  # Required to trigger/poll workflow runs
+    workflow_slug: str = ""  # e.g. "pydantic-agents-pipeline" (from the Workflow's Dashboard page)
     
     # Pipeline Configuration
     quality_threshold: int = 85

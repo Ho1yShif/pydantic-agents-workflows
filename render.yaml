@@ -13,14 +13,16 @@ projects:
 
         # Services in the production environment
         services:
-          # Backend API (FastAPI + Pydantic AI + Logfire)
+          # Backend API gateway (FastAPI + Logfire).
+          # The Q&A pipeline + ingestion run in a separate Render Workflows
+          # service (created in the Dashboard — Blueprints don't yet support
+          # Workflows). This gateway triggers and polls workflow runs.
           - type: web
             name: pydantic-agents-api
             runtime: python
             plan: starter
             region: oregon
             buildCommand: uv sync --no-dev --frozen
-            preDeployCommand: uv run python data/scripts/ingest_docs.py --sync && uv run python data/scripts/add_pricing_page.py && uv run python data/scripts/add_workflows_tutorial_page.py && uv run python data/scripts/add_workflows_docs_page.py && uv run python data/scripts/add_autoscaling_page.py && uv run python data/scripts/add_nodejs_page.py && uv run python data/scripts/add_tutorials_index_page.py
             startCommand: uv run uvicorn backend.main:app --host 0.0.0.0 --port $PORT
             healthCheckPath: /health
             envVars:
@@ -32,6 +34,12 @@ projects:
               - key: LOGFIRE_TOKEN
                 sync: false
               - key: LOGFIRE_READ_TOKEN
+                sync: false
+              # Render Workflows: trigger/poll the pipeline workflow.
+              # Set after creating the Workflow service in the Dashboard.
+              - key: RENDER_API_KEY
+                sync: false
+              - key: WORKFLOW_SLUG
                 sync: false
               # Database connection (auto-injected from database)
               - key: DATABASE_URL
@@ -59,6 +67,23 @@ projects:
                 value: "true"
               - key: LOG_LEVEL
                 value: INFO
+
+          # Ingestion refresh cron — triggers the Workflow's `ingest_all`
+          # fan-out on a schedule (Workflows have no built-in scheduling).
+          - type: cron
+            name: pydantic-agents-ingest
+            runtime: python
+            plan: starter
+            region: oregon
+            schedule: "0 6 * * *"  # daily at 06:00 UTC
+            buildCommand: uv sync --no-dev --frozen
+            startCommand: uv run python workflows/trigger_ingest.py
+            envVars:
+              # Set after creating the Workflow service in the Dashboard.
+              - key: RENDER_API_KEY
+                sync: false
+              - key: WORKFLOW_SLUG
+                sync: false
 
           # Frontend (Next.js Static Site)
           - type: web
