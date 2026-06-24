@@ -1,10 +1,10 @@
 projects:
-  - name: pydantic-agents
+  - name: pydantic-agents-workflows
     environments:
       - name: production
         # PostgreSQL database with pgvector extension
         databases:
-          - name: pydantic-agents-db
+          - name: pydantic-agents-workflows-db
             databaseName: pydantic_agents_db
             user: pydantic_agents_user
             plan: basic-1gb
@@ -18,7 +18,7 @@ projects:
           # service (created in the Dashboard — Blueprints don't yet support
           # Workflows). This gateway triggers and polls workflow runs.
           - type: web
-            name: pydantic-agents-api
+            name: pydantic-agents-workflows-api
             runtime: python
             plan: starter
             region: oregon
@@ -44,7 +44,7 @@ projects:
               # Database connection (auto-injected from database)
               - key: DATABASE_URL
                 fromDatabase:
-                  name: pydantic-agents-db
+                  name: pydantic-agents-workflows-db
                   property: connectionString
               # Pipeline configuration
               - key: QUALITY_THRESHOLD
@@ -71,7 +71,7 @@ projects:
           # Ingestion refresh cron — triggers the Workflow's `ingest_all`
           # fan-out on a schedule (Workflows have no built-in scheduling).
           - type: cron
-            name: pydantic-agents-ingest
+            name: pydantic-agents-workflows-ingest
             runtime: python
             plan: starter
             region: oregon
@@ -88,7 +88,7 @@ projects:
           # Frontend (Next.js Static Site)
           - type: web
             runtime: static
-            name: pydantic-agents-frontend
+            name: pydantic-agents-workflows-frontend
             rootDir: frontend
             buildCommand: rm -rf node_modules/.cache .next out && npm ci && npm run build
             staticPublishPath: out
