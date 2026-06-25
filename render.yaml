@@ -1,3 +1,77 @@
+# Reusable environment variable groups.
+#
+# `pipeline-shared` is the single source of truth for the Q&A pipeline config
+# (LLM/Logfire secrets + thresholds + model selection). It is consumed by the
+# API gateway below AND linked to the Render Workflows service (created in the
+# Dashboard — Blueprints don't yet support Workflows). Both run the same
+# `backend.config.Settings`, so they must see identical config; linking one
+# group beats hand-pasting ~20 vars into the Dashboard.
+#
+# `workflow-trigger` holds the creds the gateway + ingest cron need to trigger
+# and poll workflow runs. Set WORKFLOW_SLUG once after the Workflows service
+# exists and both services inherit it.
+envVarGroups:
+  - name: pipeline-shared
+    envVars:
+      # Secrets — prompted once on first apply (no defaults in backend/config.py)
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: LOGFIRE_TOKEN
+        sync: false
+      - key: LOGFIRE_READ_TOKEN
+        sync: false
+      # Pipeline configuration
+      - key: QUALITY_THRESHOLD
+        value: "85"
+      - key: ACCURACY_THRESHOLD
+        value: "70"
+      - key: AGREEMENT_THRESHOLD
+        value: "10"
+      - key: MAX_ITERATIONS
+        value: "1"
+      - key: MAX_TOKENS
+        value: "2000"
+      - key: TIMEOUT_SECONDS
+        value: "30"
+      # RAG configuration
+      - key: RAG_TOP_K
+        value: "20"
+      - key: SIMILARITY_THRESHOLD
+        value: "0.3"
+      - key: VERIFICATION_THRESHOLD
+        value: "0.30"
+      - key: EMBEDDING_MODEL
+        value: text-embedding-3-small
+      - key: EMBEDDING_DIMENSIONS
+        value: "1536"
+      # Model selection
+      - key: ANSWER_MODEL
+        value: claude-sonnet-4-6
+      - key: CLAIMS_MODEL
+        value: gpt-5.4-mini
+      - key: ACCURACY_MODEL
+        value: claude-sonnet-4-6
+      - key: EVAL_MODEL_OPENAI
+        value: gpt-5.4-mini
+      - key: EVAL_MODEL_ANTHROPIC
+        value: claude-sonnet-4-6
+      - key: QUERY_EXPANSION_MODEL
+        value: gpt-4.1-nano
+      # Performance
+      - key: ENABLE_CACHING
+        value: "true"
+      - key: LOG_LEVEL
+        value: INFO
+
+  - name: workflow-trigger
+    envVars:
+      - key: RENDER_API_KEY
+        sync: false
+      - key: WORKFLOW_SLUG
+        sync: false
+
 projects:
   - name: pydantic-agents-workflows
     environments:
@@ -26,47 +100,15 @@ projects:
             startCommand: uv run uvicorn backend.main:app --host 0.0.0.0 --port $PORT
             healthCheckPath: /health
             envVars:
-              # API Keys (will prompt for values on first deploy)
-              - key: OPENAI_API_KEY
-                sync: false
-              - key: ANTHROPIC_API_KEY
-                sync: false
-              - key: LOGFIRE_TOKEN
-                sync: false
-              - key: LOGFIRE_READ_TOKEN
-                sync: false
-              # Render Workflows: trigger/poll the pipeline workflow.
-              # Set after creating the Workflow service in the Dashboard.
-              - key: RENDER_API_KEY
-                sync: false
-              - key: WORKFLOW_SLUG
-                sync: false
+              # Shared pipeline config + secrets (also linked to the Workflows service)
+              - fromGroup: pipeline-shared
+              # Workflow trigger creds (shared with the ingest cron)
+              - fromGroup: workflow-trigger
               # Database connection (auto-injected from database)
               - key: DATABASE_URL
                 fromDatabase:
                   name: pydantic-agents-workflows-db
                   property: connectionString
-              # Pipeline configuration
-              - key: QUALITY_THRESHOLD
-                value: "85"
-              - key: ACCURACY_THRESHOLD
-                value: "70"
-              - key: MAX_ITERATIONS
-                value: "1"
-              - key: MAX_TOKENS
-                value: "2000"
-              # RAG configuration
-              - key: RAG_TOP_K
-                value: "20"
-              - key: SIMILARITY_THRESHOLD
-                value: "0.3"
-              - key: VERIFICATION_THRESHOLD
-                value: "0.30"
-              # Performance settings
-              - key: ENABLE_CACHING
-                value: "true"
-              - key: LOG_LEVEL
-                value: INFO
 
           # Ingestion refresh cron — triggers the Workflow's `ingest_all`
           # fan-out on a schedule (Workflows have no built-in scheduling).
@@ -79,11 +121,8 @@ projects:
             buildCommand: uv sync --no-dev --frozen
             startCommand: uv run python workflows/trigger_ingest.py
             envVars:
-              # Set after creating the Workflow service in the Dashboard.
-              - key: RENDER_API_KEY
-                sync: false
-              - key: WORKFLOW_SLUG
-                sync: false
+              # Only needs the trigger creds (RENDER_API_KEY + WORKFLOW_SLUG)
+              - fromGroup: workflow-trigger
 
           # Frontend (Next.js Static Site)
           - type: web
@@ -101,4 +140,3 @@ projects:
               - type: rewrite
                 source: /*
                 destination: /index.html
-
