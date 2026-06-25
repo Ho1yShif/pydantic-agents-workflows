@@ -1,0 +1,32 @@
+name: OpenAI
+id: openai
+models:
+  - id: text-embedding-3-small
+    prices:
+      input_mtok: 0.02
+  - id: text-embedding-3-large
+    prices:
+      input_mtok: 0.13
+  - id: text-embedding-ada-002
+    prices:
+      input_mtok: 0.10
+  - id: gpt-4.1-nano
+    prices:
+      input_mtok: 0.10
+      output_mtok: 0.40
+  - id: gpt-4o-mini
+    prices:
+      input_mtok: 0.15
+      output_mtok: 0.60
+  - id: gpt-5.4-mini
+    prices:
+      input_mtok: 0.15
+      output_mtok: 0.60
+  - id: gpt-4o
+    prices:
+      input_mtok: 2.50
+      output_mtok: 10.00
+  - id: gpt-5.4
+    prices:
+      input_mtok: 2.50
+      output_mtok: 10.00

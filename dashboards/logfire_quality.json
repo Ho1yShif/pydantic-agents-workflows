@@ -1,0 +1,349 @@
+{
+  "kind": "Dashboard",
+  "metadata": {
+    "name": "Ask Render Anything Quality Metrics",
+    "project": "logfire-render-demo"
+  },
+  "spec": {
+    "display": {
+      "name": "Ask Render Anything Quality Metrics",
+      "description": "Monitor answer quality, accuracy, and evaluation scores"
+    },
+    "panels": {
+      "QualityScoreTrend": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Quality Score Trend"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "Score (0-100)",
+                "format": {
+                  "decimalPlaces": 1
+                }
+              },
+              "visual": {
+                "display": "line",
+                "areaOpacity": 0.25
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    AVG((attributes->>'quality_score')::FLOAT) as \"quality_score\"\nFROM records\nWHERE span_name = 'qa_pipeline'\n  AND attributes->>'quality_score' IS NOT NULL\nGROUP BY time\nORDER BY time DESC;",
+                    "metrics": [
+                      "quality_score"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "AccuracyScore": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Technical Accuracy Score"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "Score (0-100)",
+                "format": {
+                  "decimalPlaces": 1
+                }
+              },
+              "visual": {
+                "display": "line",
+                "areaOpacity": 0.25
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    AVG((attributes->>'accuracy_score')::FLOAT) as \"accuracy_score\"\nFROM records\nWHERE attributes->>'stage' = 'technical_accuracy'\n  AND attributes->>'accuracy_score' IS NOT NULL\nGROUP BY time\nORDER BY time DESC;",
+                    "metrics": [
+                      "accuracy_score"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "IterationRate": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Iteration Rate (%)"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "%",
+                "format": {
+                  "unit": "percent",
+                  "suffix": "%",
+                  "decimalPlaces": 1
+                }
+              },
+              "visual": {
+                "display": "line",
+                "areaOpacity": 0.25
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    (SUM(CASE WHEN (attributes->>'iterations')::INT > 1 THEN 1 ELSE 0 END)::FLOAT / COUNT(*) * 100) as \"iteration_rate\"\nFROM records\nWHERE span_name = 'qa_pipeline'\n  AND attributes->>'iterations' IS NOT NULL\nGROUP BY time\nORDER BY time DESC;",
+                    "metrics": [
+                      "iteration_rate"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "ClaimsVerificationRate": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Claims Verification Rate (%)"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "%",
+                "format": {
+                  "unit": "percent",
+                  "suffix": "%",
+                  "decimalPlaces": 1
+                }
+              },
+              "visual": {
+                "display": "line",
+                "areaOpacity": 0.25
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    AVG((attributes->>'verification_rate')::FLOAT * 100) as \"verification_rate\"\nFROM records\nWHERE attributes->>'stage' = 'claims_verification'\n  AND attributes->>'verification_rate' IS NOT NULL\nGROUP BY time\nORDER BY time DESC;",
+                    "metrics": [
+                      "verification_rate"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "EvaluatorAgreement": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Evaluator Agreement (OpenAI vs Anthropic)"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "Score Difference",
+                "format": {
+                  "decimalPlaces": 1
+                }
+              },
+              "visual": {
+                "display": "line",
+                "areaOpacity": 0.25
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    AVG(ABS((attributes->>'openai_score')::FLOAT - (attributes->>'anthropic_score')::FLOAT)) as \"score_difference\"\nFROM records\nWHERE attributes->>'stage' = 'quality_evaluation'\n  AND attributes->>'openai_score' IS NOT NULL\n  AND attributes->>'anthropic_score' IS NOT NULL\nGROUP BY time\nORDER BY time DESC;",
+                    "metrics": [
+                      "score_difference"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "ClaimsCount": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Average Claims per Answer"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "Claims",
+                "format": {
+                  "decimalPlaces": 1
+                }
+              },
+              "visual": {
+                "display": "line",
+                "areaOpacity": 0.25
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    AVG((attributes->>'claim_count')::INT) as \"avg_claims\"\nFROM records\nWHERE attributes->>'stage' = 'claims_extraction'\n  AND attributes->>'claim_count' IS NOT NULL\nGROUP BY time\nORDER BY time DESC;",
+                    "metrics": [
+                      "avg_claims"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "title": "Quality Metrics",
+            "collapse": {
+              "open": true
+            }
+          },
+          "items": [
+            {
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/QualityScoreTrend"
+              }
+            },
+            {
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/AccuracyScore"
+              }
+            },
+            {
+              "x": 0,
+              "y": 8,
+              "width": 12,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/IterationRate"
+              }
+            },
+            {
+              "x": 12,
+              "y": 8,
+              "width": 12,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/ClaimsVerificationRate"
+              }
+            },
+            {
+              "x": 0,
+              "y": 16,
+              "width": 12,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/EvaluatorAgreement"
+              }
+            },
+            {
+              "x": 12,
+              "y": 16,
+              "width": 12,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/ClaimsCount"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "variables": [],
+    "duration": "24h",
+    "refreshInterval": "1m"
+  }
+}

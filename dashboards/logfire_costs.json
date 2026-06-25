@@ -1,0 +1,300 @@
+{
+  "kind": "Dashboard",
+  "metadata": {
+    "name": "Ask Render Anything Cost Analysis",
+    "project": "logfire-render-demo"
+  },
+  "spec": {
+    "display": {
+      "name": "Ask Render Anything Cost Analysis",
+      "description": "Track and analyze AI costs across all pipeline stages"
+    },
+    "panels": {
+      "TotalCost24h": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Total Cost (24h)"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "$",
+                "format": {
+                  "unit": "currency",
+                  "prefix": "$",
+                  "decimalPlaces": 4
+                }
+              },
+              "visual": {
+                "display": "line",
+                "areaOpacity": 0.25
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    SUM((attributes->>'cost_usd')::FLOAT) as \"total_cost\"\nFROM records\nWHERE attributes->>'cost_usd' IS NOT NULL\nGROUP BY time\nORDER BY time DESC;",
+                    "metrics": [
+                      "total_cost"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "AverageCostPerRequest": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Average Cost per Request"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "$",
+                "format": {
+                  "unit": "currency",
+                  "prefix": "$",
+                  "decimalPlaces": 4
+                }
+              },
+              "visual": {
+                "display": "line",
+                "areaOpacity": 0.25
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    AVG((attributes->>'total_cost')::FLOAT) as \"avg_cost\"\nFROM records\nWHERE span_name = 'qa_pipeline'\n  AND attributes->>'total_cost' IS NOT NULL\nGROUP BY time\nORDER BY time DESC;",
+                    "metrics": [
+                      "avg_cost"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "CostByStage": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Cost Breakdown by Pipeline Stage"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "$",
+                "format": {
+                  "unit": "currency",
+                  "prefix": "$",
+                  "decimalPlaces": 4
+                }
+              },
+              "visual": {
+                "display": "line",
+                "areaOpacity": 0.5
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    attributes->>'stage' as stage,\n    SUM((attributes->>'cost_usd')::FLOAT) as cost\nFROM records\nWHERE attributes->>'_span_type' = 'pipeline_stage'\n  AND attributes->>'cost_usd' IS NOT NULL\nGROUP BY time, stage\nORDER BY time DESC, cost DESC;",
+                    "groupBy": "stage",
+                    "metrics": [
+                      "cost"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "TokenUsage": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Token Usage by Stage"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "Tokens"
+              },
+              "visual": {
+                "display": "line",
+                "areaOpacity": 0.25
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    attributes->>'stage' as stage,\n    SUM((attributes->>'tokens_used')::INT) as tokens\nFROM records\nWHERE attributes->>'_span_type' = 'pipeline_stage'\n  AND attributes->>'tokens_used' IS NOT NULL\nGROUP BY time, stage\nORDER BY time DESC;",
+                    "groupBy": "stage",
+                    "metrics": [
+                      "tokens"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "CostPerIteration": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Cost by Iteration Count"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "$",
+                "format": {
+                  "unit": "currency",
+                  "prefix": "$",
+                  "decimalPlaces": 4
+                }
+              },
+              "visual": {
+                "display": "bar"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    (attributes->>'iterations')::INT as iterations,\n    AVG((attributes->>'total_cost')::FLOAT) as \"avg_cost\"\nFROM records\nWHERE span_name = 'qa_pipeline'\n  AND attributes->>'iterations' IS NOT NULL\n  AND attributes->>'total_cost' IS NOT NULL\nGROUP BY time, iterations\nORDER BY time DESC, iterations;",
+                    "groupBy": "iterations",
+                    "metrics": [
+                      "avg_cost"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "title": "Cost Overview",
+            "collapse": {
+              "open": true
+            }
+          },
+          "items": [
+            {
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/TotalCost24h"
+              }
+            },
+            {
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/AverageCostPerRequest"
+              }
+            },
+            {
+              "x": 0,
+              "y": 8,
+              "width": 24,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/CostByStage"
+              }
+            },
+            {
+              "x": 0,
+              "y": 16,
+              "width": 12,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/TokenUsage"
+              }
+            },
+            {
+              "x": 12,
+              "y": 16,
+              "width": 12,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/CostPerIteration"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "variables": [],
+    "duration": "24h",
+    "refreshInterval": "1m"
+  }
+}

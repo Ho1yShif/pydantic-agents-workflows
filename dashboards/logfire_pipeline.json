@@ -1,0 +1,291 @@
+{
+  "kind": "Dashboard",
+  "metadata": {
+    "name": "Ask Render Anything Pipeline Overview",
+    "project": "logfire-render-demo"
+  },
+  "spec": {
+    "display": {
+      "name": "Ask Render Anything Pipeline Overview",
+      "description": "Real-time monitoring of the 8-stage Q&A pipeline"
+    },
+    "panels": {
+      "RequestVolume": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Request Volume"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "Requests"
+              },
+              "visual": {
+                "display": "line",
+                "areaOpacity": 0.25
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    COUNT(*) as requests\nFROM records\nWHERE span_name = 'qa_pipeline'\nGROUP BY time\nORDER BY time DESC;",
+                    "metrics": [
+                      "requests"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "AverageResponseTime": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Average Response Time"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "ms",
+                "format": {
+                  "unit": "milliseconds",
+                  "suffix": "ms",
+                  "decimalPlaces": 0
+                }
+              },
+              "visual": {
+                "display": "line",
+                "areaOpacity": 0.25
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    AVG(duration) as \"avg_duration_ms\"\nFROM records\nWHERE span_name = 'qa_pipeline'\nGROUP BY time\nORDER BY time DESC;",
+                    "metrics": [
+                      "avg_duration_ms"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "QualityScore": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Average Quality Score"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "Score",
+                "format": {
+                  "decimalPlaces": 1
+                }
+              },
+              "visual": {
+                "display": "line",
+                "areaOpacity": 0.25
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    AVG((attributes->>'quality_score')::FLOAT) as \"avg_quality\"\nFROM records\nWHERE span_name = 'qa_pipeline'\n  AND attributes->>'quality_score' IS NOT NULL\nGROUP BY time\nORDER BY time DESC;",
+                    "metrics": [
+                      "avg_quality"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "IterationDistribution": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Iteration Distribution"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "Count"
+              },
+              "visual": {
+                "display": "bar"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    (attributes->>'iterations')::INT as iterations,\n    COUNT(*) as count\nFROM records\nWHERE span_name = 'qa_pipeline'\n  AND attributes->>'iterations' IS NOT NULL\nGROUP BY time, iterations\nORDER BY time DESC, iterations;",
+                    "groupBy": "iterations",
+                    "metrics": [
+                      "count"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "TotalCost": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Total Cost (USD)"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "$",
+                "format": {
+                  "unit": "currency",
+                  "prefix": "$",
+                  "decimalPlaces": 4
+                }
+              },
+              "visual": {
+                "display": "line",
+                "areaOpacity": 0.25
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LogfireTimeSeriesQuery",
+                  "spec": {
+                    "query": "SELECT\n    time_bucket($resolution, start_timestamp) AS time,\n    SUM((attributes->>'total_cost')::FLOAT) as \"total_cost\"\nFROM records\nWHERE span_name = 'qa_pipeline'\n  AND attributes->>'total_cost' IS NOT NULL\nGROUP BY time\nORDER BY time DESC;",
+                    "metrics": [
+                      "total_cost"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "title": "Pipeline Metrics",
+            "collapse": {
+              "open": true
+            }
+          },
+          "items": [
+            {
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/RequestVolume"
+              }
+            },
+            {
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/AverageResponseTime"
+              }
+            },
+            {
+              "x": 0,
+              "y": 8,
+              "width": 12,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/QualityScore"
+              }
+            },
+            {
+              "x": 12,
+              "y": 8,
+              "width": 12,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/TotalCost"
+              }
+            },
+            {
+              "x": 0,
+              "y": 16,
+              "width": 24,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/IterationDistribution"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "variables": [],
+    "duration": "1h",
+    "refreshInterval": "30s"
+  }
+}

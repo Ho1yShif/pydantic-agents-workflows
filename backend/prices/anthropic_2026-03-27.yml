@@ -1,0 +1,31 @@
+name: Anthropic
+id: anthropic
+models:
+  - id: claude-sonnet-4-6
+    prices:
+      input_mtok: 3.00
+      output_mtok: 15.00
+  - id: claude-sonnet-4-5
+    prices:
+      input_mtok: 3.00
+      output_mtok: 15.00
+  - id: claude-sonnet-4
+    prices:
+      input_mtok: 3.00
+      output_mtok: 15.00
+  - id: claude-haiku-4-5
+    prices:
+      input_mtok: 1.00
+      output_mtok: 5.00
+  - id: claude-opus-4-6
+    prices:
+      input_mtok: 5.00
+      output_mtok: 25.00
+  - id: claude-3-5-sonnet
+    prices:
+      input_mtok: 3.00
+      output_mtok: 15.00
+  - id: claude-3-5-haiku
+    prices:
+      input_mtok: 0.80
+      output_mtok: 4.00
