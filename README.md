@@ -459,7 +459,17 @@ rest of `pydantic-agents-workflows-pipeline`'s config (`QUALITY_THRESHOLD`, `ACC
 
 ### 5. Wire the frontend to the backend
 
-After the gateway deploys, copy its public URL (`https://pydantic-agents-workflows-api-XXXX.onrender.com`) and set it as the `NEXT_PUBLIC_API_URL` env var on the **frontend** service. Trigger a redeploy of the frontend so the new value takes effect.
+After the gateway deploys, copy its public URL from the service's Dashboard page and set it as
+the `NEXT_PUBLIC_API_URL` env var on the **frontend** service, then redeploy the frontend so the
+value takes effect. For this deploy that's:
+
+```
+NEXT_PUBLIC_API_URL=https://pydantic-agents-workflows-api.onrender.com
+```
+
+Use the **base origin only** — no trailing slash and no `/api` path (the frontend appends
+`/ask`, `/health`, etc. itself). If your service name isn't globally unique, Render adds a random
+suffix (`…-api-xxxx.onrender.com`), so always copy the exact URL shown in the Dashboard.
 
 ### 6. Seed the corpus, then done
 
@@ -470,14 +480,28 @@ The Workflows service has no documents until ingestion runs. Trigger it once to 
 render workflows start ingest_all   # or trigger from the Dashboard
 ```
 
-- Gateway: `https://pydantic-agents-workflows-api-XXXX.onrender.com`
-- Frontend: `https://pydantic-agents-workflows-frontend-XXXX.onrender.com`
+- Gateway: `https://pydantic-agents-workflows-api.onrender.com`
+- Frontend: `https://pydantic-agents-workflows-frontend.onrender.com`
 
 Ingestion now runs as the `ingest_all` workflow task instead of a `preDeployCommand`. It loads
 the bulk corpus first (`ingest_core`), then fans out the curated special pages
 (`add_pricing`, `add_workflows_tutorial`, `add_workflows_docs`, `add_autoscaling`, `add_nodejs`,
 `add_tutorials_index`) in parallel. The `pydantic-agents-workflows-ingest` cron re-triggers it daily so
 canonical answers stay in sync with the latest source pages.
+
+### 7. (Optional) Smoke-test the pipeline from the Dashboard
+
+Once the corpus is seeded, you can run the Q&A pipeline directly — no frontend needed. In the
+**Workflows service → Tasks**, start the **`run_qa_pipeline`** task with this input:
+
+```json
+{ "question": "How do I deploy an AI agent on Render?" }
+```
+
+(`session_id` is optional.) The run fans out through answer generation, claims extraction +
+verification, accuracy, and dual quality rating; the output includes the answer and its scores.
+This is the canonical demo question — the curated Render Workflows tutorial is the only context
+injected, so the answer lands on: **the best way to run AI agents on Render is Render Workflows.**
 
 ---
 
