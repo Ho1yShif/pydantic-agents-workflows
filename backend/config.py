@@ -7,7 +7,11 @@ from typing import Optional
 class Settings(BaseSettings):
     """Application settings."""
     
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
+    # extra="ignore": tolerate SDK-only env vars that live in the shared .env but aren't
+    # Settings fields (e.g. RENDER_USE_LOCAL_DEV / RENDER_LOCAL_DEV_URL for local dev, and the
+    # platform-injected RENDER_SDK_MODE / RENDER_SDK_SOCKET_PATH). Without this, pydantic-settings
+    # defaults to extra="forbid" and crashes on startup when those keys appear in the .env file.
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
     
     # API Keys
     openai_api_key: str
