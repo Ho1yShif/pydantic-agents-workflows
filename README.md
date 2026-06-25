@@ -390,17 +390,30 @@ Blueprints (`render.yaml`) can't create Workflows yet, so do this once in the Da
 
 1. Under **Environment → Environment Groups**, click **Link Existing Group → `pydantic-agents-workflows-pipeline`**.
    This pulls in both API keys, both Logfire tokens, and all pipeline/RAG/model config in one step.
-2. Add the two variables that *can't* come from the group:
+2. Add the two variables that *can't* come from the group (env groups hold only plain
+   `key: value` pairs — no database links):
 
    | Variable | Required? | Value / Source |
    |---|---|---|
    | `DATABASE_URL` | ✅ Required | Click **Add from Database → `pydantic-agents-workflows-db`** (already provisioned by step 2's Blueprint — you are *not* creating a new database, just linking the existing one). Use the **same** database as the gateway so the **History** tab populates. |
    | `PYTHON_VERSION` | Recommended | `3.13` (see the build note above) |
 
+   > **Bind `DATABASE_URL`, don't hardcode it.** *Add from Database* injects the managed
+   > internal connection string and auto-updates if creds rotate. Pasting a literal URL (into the
+   > service or the group) is a static snapshot that breaks on rotation — avoid it.
+
 The four secrets in `pydantic-agents-workflows-pipeline` (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `LOGFIRE_TOKEN`,
 `LOGFIRE_READ_TOKEN`) are **required** — the service crashes on startup without the first three
 (they have no defaults in [`backend/config.py`](./backend/config.py)). You set them once when
 applying the Blueprint (step 2); linking the group here reuses those same values.
+
+**End state — the Workflows service environment:**
+
+```
+[linked group]  pydantic-agents-workflows-pipeline   # 4 secrets + pipeline/RAG/model config
+DATABASE_URL    → from pydantic-agents-workflows-db   # per-service bind, not in any group
+PYTHON_VERSION  = 3.13
+```
 
 > **Don't link `pydantic-agents-workflows-pipeline-trigger` to the Workflows service.** `RENDER_API_KEY` / `WORKFLOW_SLUG`
 > are only for the gateway/cron that *trigger* it from outside. The workflow fans out its own
