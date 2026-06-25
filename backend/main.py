@@ -8,6 +8,15 @@ polls it for the result. It also serves health, stats, and session history.
 from contextlib import asynccontextmanager
 from functools import lru_cache
 
+# Export .env into os.environ before importing the Render SDK. The SDK reads
+# RENDER_USE_LOCAL_DEV (and other SDK-only vars) via os.getenv(), but pydantic-settings
+# loads .env into Settings only — it never populates os.environ. Without this, local dev
+# falls through to https://api.render.com instead of the local dev server on :8120. In
+# cloud there is no .env file, so this is a no-op.
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import logfire
