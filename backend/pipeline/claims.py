@@ -11,14 +11,25 @@ from backend.observability import instrument_stage, calculate_openai_cost
 import logfire
 
 
-CLAIMS_EXTRACTION_INSTRUCTIONS = """Extract all factual claims from answers about Render's platform.
+CLAIMS_EXTRACTION_INSTRUCTIONS = """Extract the verifiable factual claims from answers about Render's platform.
 
-A factual claim is a specific, verifiable statement about Render's platform features, pricing, or capabilities.
+A factual claim is a specific statement about Render's own platform — its features, products, pricing, \
+limits, or documented behavior — that could be checked against Render's documentation.
 
-Each claim must be:
-- A single, specific fact (one sentence)
-- Independently verifiable
-- Technical or product-related
+Each extracted claim must be:
+- A single, specific, atomic fact (one sentence)
+- About Render's platform specifically (not general software/computer-science principles)
+- Independently checkable against documentation
+
+DO NOT extract (these are not Render-documentation facts and will always fail verification):
+- Rhetorical, motivational, or comparative framing (e.g. "naive parallel calls have no durability", \
+"a crash loses everything", "hand-rolled queues require building consumer groups and retry logic")
+- General computer-science or industry assertions not specific to Render
+- Meta-statements about the answer, the tutorial, or the documentation itself \
+(e.g. "the tutorial builds a code-review agent", "the canonical tutorial is located at <url>")
+- Opinions, recommendations phrased as preference, or vague generalities
+
+When in doubt, prefer fewer, higher-quality claims that are concrete Render facts.
 
 Return a JSON object with a "claims" array of claim strings."""
 

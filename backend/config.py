@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     accuracy_threshold: int = 70  # Based on empirical avg of 73 (was 80, too strict)
     agreement_threshold: int = 10
     max_iterations: int = 1  # First iteration is best; further iterations degrade quality
-    max_tokens: int = 2000
+    max_tokens: int = 4000  # Answer generation budget; raised from 2000 so broad answers aren't truncated
     timeout_seconds: int = 30
     
     # RAG Configuration
