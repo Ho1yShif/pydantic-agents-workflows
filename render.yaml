@@ -1,17 +1,17 @@
 # Reusable environment variable groups.
 #
-# `pipeline-shared` is the single source of truth for the Q&A pipeline config
+# `pydantic-agents-workflows-pipeline` is the single source of truth for the Q&A pipeline config
 # (LLM/Logfire secrets + thresholds + model selection). It is consumed by the
 # API gateway below AND linked to the Render Workflows service (created in the
 # Dashboard — Blueprints don't yet support Workflows). Both run the same
 # `backend.config.Settings`, so they must see identical config; linking one
 # group beats hand-pasting ~20 vars into the Dashboard.
 #
-# `workflow-trigger` holds the creds the gateway + ingest cron need to trigger
+# `pydantic-agents-workflows-pipeline-trigger` holds the creds the gateway + ingest cron need to trigger
 # and poll workflow runs. Set WORKFLOW_SLUG once after the Workflows service
 # exists and both services inherit it.
 envVarGroups:
-  - name: pipeline-shared
+  - name: pydantic-agents-workflows-pipeline
     envVars:
       # Secrets — prompted once on first apply (no defaults in backend/config.py)
       - key: OPENAI_API_KEY
@@ -65,7 +65,7 @@ envVarGroups:
       - key: LOG_LEVEL
         value: INFO
 
-  - name: workflow-trigger
+  - name: pydantic-agents-workflows-pipeline-trigger
     envVars:
       - key: RENDER_API_KEY
         sync: false
@@ -101,9 +101,9 @@ projects:
             healthCheckPath: /health
             envVars:
               # Shared pipeline config + secrets (also linked to the Workflows service)
-              - fromGroup: pipeline-shared
+              - fromGroup: pydantic-agents-workflows-pipeline
               # Workflow trigger creds (shared with the ingest cron)
-              - fromGroup: workflow-trigger
+              - fromGroup: pydantic-agents-workflows-pipeline-trigger
               # Database connection (auto-injected from database)
               - key: DATABASE_URL
                 fromDatabase:
@@ -122,7 +122,7 @@ projects:
             startCommand: uv run python workflows/trigger_ingest.py
             envVars:
               # Only needs the trigger creds (RENDER_API_KEY + WORKFLOW_SLUG)
-              - fromGroup: workflow-trigger
+              - fromGroup: pydantic-agents-workflows-pipeline-trigger
 
           # Frontend (Next.js Static Site)
           - type: web

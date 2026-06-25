@@ -255,8 +255,8 @@ make run-frontend
 > **Local config → deployed env groups.** Locally, every process reads from one `.env`
 > (copied from [`.env.example`](./.env.example)). When you deploy, that same `.env` splits into
 > the two Render env groups in [`render.yaml`](./render.yaml): the LLM/Logfire secrets +
-> pipeline/RAG/model config become **`pipeline-shared`**, and `RENDER_API_KEY` / `WORKFLOW_SLUG`
-> become **`workflow-trigger`**. So editing `.env` is the local equivalent of editing a group —
+> pipeline/RAG/model config become **`pydantic-agents-workflows-pipeline`**, and `RENDER_API_KEY` / `WORKFLOW_SLUG`
+> become **`pydantic-agents-workflows-pipeline-trigger`**. So editing `.env` is the local equivalent of editing a group —
 > see [Deploy → Environment groups](#environment-groups). The local-only knobs
 > (`RENDER_USE_LOCAL_DEV`, `DATABASE_URL` pointing at Docker Postgres) don't go in any group:
 > in the cloud the SDK uses the platform socket and `DATABASE_URL` is injected from the database.
@@ -344,10 +344,10 @@ so config lives in one place instead of being duplicated across services:
 
 | Group | Contents | Linked to |
 |---|---|---|
-| **`pipeline-shared`** | LLM/Logfire secrets + all pipeline, RAG, and model config (~20 vars) | API gateway **and** the Workflows service (step 3) |
-| **`workflow-trigger`** | `RENDER_API_KEY`, `WORKFLOW_SLUG` | API gateway **and** the ingest cron |
+| **`pydantic-agents-workflows-pipeline`** | LLM/Logfire secrets + all pipeline, RAG, and model config (~20 vars) | API gateway **and** the Workflows service (step 3) |
+| **`pydantic-agents-workflows-pipeline-trigger`** | `RENDER_API_KEY`, `WORKFLOW_SLUG` | API gateway **and** the ingest cron |
 
-The payoff is `pipeline-shared`: the gateway and the Workflows service both run the same
+The payoff is `pydantic-agents-workflows-pipeline`: the gateway and the Workflows service both run the same
 `backend.config.Settings`, so they need identical config. Linking the group to the
 hand-created Workflows service (step 3) replaces pasting ~20 variables by hand. `DATABASE_URL`
 stays per-service (it's injected from the database, which can't live in a group), and the
@@ -386,9 +386,9 @@ Blueprints (`render.yaml`) can't create Workflows yet, so do this once in the Da
 
 **3c. Link config and add the database.** The Workflows service runs the same
 `backend.config.Settings` as the gateway, so instead of re-typing every variable, **link the
-`pipeline-shared` env group** the Blueprint already created:
+`pydantic-agents-workflows-pipeline` env group** the Blueprint already created:
 
-1. Under **Environment → Environment Groups**, click **Link Existing Group → `pipeline-shared`**.
+1. Under **Environment → Environment Groups**, click **Link Existing Group → `pydantic-agents-workflows-pipeline`**.
    This pulls in both API keys, both Logfire tokens, and all pipeline/RAG/model config in one step.
 2. Add the two variables that *can't* come from the group:
 
@@ -397,19 +397,19 @@ Blueprints (`render.yaml`) can't create Workflows yet, so do this once in the Da
    | `DATABASE_URL` | ✅ Required | Click **Add from Database → `pydantic-agents-workflows-db`** (already provisioned by step 2's Blueprint — you are *not* creating a new database, just linking the existing one). Use the **same** database as the gateway so the **History** tab populates. |
    | `PYTHON_VERSION` | Recommended | `3.13` (see the build note above) |
 
-The four secrets in `pipeline-shared` (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `LOGFIRE_TOKEN`,
+The four secrets in `pydantic-agents-workflows-pipeline` (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `LOGFIRE_TOKEN`,
 `LOGFIRE_READ_TOKEN`) are **required** — the service crashes on startup without the first three
 (they have no defaults in [`backend/config.py`](./backend/config.py)). You set them once when
 applying the Blueprint (step 2); linking the group here reuses those same values.
 
-> **Don't link `workflow-trigger` to the Workflows service.** `RENDER_API_KEY` / `WORKFLOW_SLUG`
+> **Don't link `pydantic-agents-workflows-pipeline-trigger` to the Workflows service.** `RENDER_API_KEY` / `WORKFLOW_SLUG`
 > are only for the gateway/cron that *trigger* it from outside. The workflow fans out its own
 > subtasks over the platform-injected socket, so it never calls the public API. Likewise, leave
 > the platform-injected `RENDER_SDK_MODE` / `RENDER_SDK_SOCKET_PATH` alone.
 
 **3d. Create the service** and wait for the first deploy to finish. Then copy the service's
 **slug** (shown on its Dashboard page / in its URL, e.g. `pydantic-agents-workflow`) — you'll
-set it as `WORKFLOW_SLUG` in the `workflow-trigger` group in step 4, which the gateway and cron
+set it as `WORKFLOW_SLUG` in the `pydantic-agents-workflows-pipeline-trigger` group in step 4, which the gateway and cron
 both inherit.
 
 ### 4. Fill in the env-group values
@@ -417,7 +417,7 @@ both inherit.
 Because the gateway and cron read everything from the two env groups, you set values **on the
 groups**, not on each service — every linked service picks them up automatically.
 
-**`pipeline-shared`** (drives the gateway + Workflows service) — set the four secrets once, when
+**`pydantic-agents-workflows-pipeline`** (drives the gateway + Workflows service) — set the four secrets once, when
 you apply the Blueprint in step 2:
 
 | Variable | Source |
@@ -427,7 +427,7 @@ you apply the Blueprint in step 2:
 | `LOGFIRE_TOKEN` | Logfire write token from step 1 |
 | `LOGFIRE_READ_TOKEN` | Logfire read token from step 1 |
 
-**`workflow-trigger`** (shared by the gateway + cron) — set these after the Workflows service
+**`pydantic-agents-workflows-pipeline-trigger`** (shared by the gateway + cron) — set these after the Workflows service
 exists (step 3):
 
 | Variable | Source |
@@ -439,7 +439,7 @@ exists (step 3):
 > linked to it, so the gateway and cron both pick up `WORKFLOW_SLUG` from a single edit.
 
 **Auto-filled, no action needed:** `DATABASE_URL` (injected from the database service) and the
-rest of `pipeline-shared`'s config (`QUALITY_THRESHOLD`, `ACCURACY_THRESHOLD`, `AGREEMENT_THRESHOLD`,
+rest of `pydantic-agents-workflows-pipeline`'s config (`QUALITY_THRESHOLD`, `ACCURACY_THRESHOLD`, `AGREEMENT_THRESHOLD`,
 `MAX_ITERATIONS`, `MAX_TOKENS`, `TIMEOUT_SECONDS`, `RAG_TOP_K`, `SIMILARITY_THRESHOLD`,
 `VERIFICATION_THRESHOLD`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, the model-selection vars,
 `ENABLE_CACHING`, `LOG_LEVEL`) ship with sensible defaults in `render.yaml`.
