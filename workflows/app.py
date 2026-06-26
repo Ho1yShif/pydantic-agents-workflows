@@ -182,13 +182,23 @@ async def rate_quality_anthropic_task(question: str, answer: str, doc_count: int
 
 @app.task(timeout_seconds=600)
 async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
-    """Orchestrate the full 8-stage Q&A pipeline as one workflow run.
+    """Orchestrate the Q&A pipeline as one workflow run.
 
-    Runs embedding and retrieval in-process, then loops generation → claims →
-    verification → (accuracy + dual-model evaluation) → quality gate up to
-    ``settings.max_iterations`` times, refining with feedback when the gate
-    fails. The accuracy and two evaluation stages fan out to parallel subtasks.
-    Returns the ``AnswerResponse`` as a JSON-serializable dict.
+    Retrieval (embedding + RAG) runs in-process. The answer is then generated and
+    put through three distinct verification capabilities, each demonstrating a
+    different Workflows pattern:
+
+      • Generate  — the expensive Claude call, isolated as a retried subtask.
+      • Grounding — extract claims, then verify them against the retrieved sources
+                    (a dependent two-subtask chain).
+      • Accuracy + Quality — a factual-correctness review (Accuracy) and a
+                    dual-model developer-experience rating (Quality) fanned out to
+                    three parallel subtasks; Quality's two judges also give a
+                    cross-provider agreement signal.
+
+    A quality gate (in-process) decides whether to return or refine with feedback,
+    looping up to ``settings.max_iterations`` times. Returns the ``AnswerResponse``
+    as a JSON-serializable dict.
     """
     await _ensure_ready(db=True)
 
@@ -197,7 +207,8 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
         total_cost = 0.0
         pipeline_start = time.time()
 
-        # Stage 1: Question embedding
+        # --- Retrieval phase (in-process): embedding + RAG ---
+        # Question embedding
         embed_result = await embed_question(question)
         stages.append(_stage_result(
             "question_embedding",
@@ -208,7 +219,7 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
         ))
         total_cost += embed_result["cost_usd"]
 
-        # Stage 2: RAG retrieval (multi-query expansion + injections run in-process)
+        # RAG retrieval (multi-query expansion + curated-doc injection run in-process)
         retrieval_result = await retrieve_documents(
             embed_result["embedding"], original_question=question
         )
@@ -236,7 +247,7 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
         while current_iteration <= settings.max_iterations:
             logfire.info(f"Starting iteration {current_iteration}")
 
-            # Stage 3: Answer generation (own retried task)
+            # --- Generate phase: the expensive Claude call as a retried subtask ---
             gen_result = await generate_answer_task(question, documents_to_json(documents), feedback)
             stages.append(_stage_result(
                 "answer_generation",
@@ -249,7 +260,8 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
             total_cost += gen_result["cost_usd"]
             answer_text = gen_result["answer"]
 
-            # Stage 4: Claims extraction (own retried task)
+            # --- Grounding phase: extract claims, then verify them against sources ---
+            # Claims extraction (own retried task)
             claims_result = await extract_claims_task(answer_text)
             stages.append(_stage_result(
                 "claims_extraction",
@@ -261,7 +273,7 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
             ))
             total_cost += claims_result["cost_usd"]
 
-            # Stage 5: Claims verification (own task; per-claim gather stays in-process inside it)
+            # Claims verification (own task; per-claim gather stays in-process inside it)
             verification_result = await verify_claims_task(claims_result["claims"])
             verified_claims = claims_from_json(verification_result["verified_claims"])
             verification_rate = verification_result["verification_rate"] * 100
@@ -279,7 +291,9 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
             ))
             total_cost += verification_result["cost_usd"]
 
-            # Stages 6 + 7: accuracy + the two quality judges — three subtasks on
+            # --- Accuracy + Quality phase: fan out to three parallel subtasks ---
+            # Accuracy (factual-grounding review) and the two Quality judges
+            # (developer-experience rating) have no mutual dependency, so they run on
             # three parallel instances. The average score and inter-judge agreement
             # are combined here (the judges already ran through build_evaluation_result).
             stage_start = time.time()
@@ -323,7 +337,7 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
             ))
             total_cost += eval_cost
 
-            # Stage 8: Quality gate
+            # --- Quality gate (in-process): return, or refine with feedback ---
             gate_result = await quality_gate_decision(
                 average_score=average_score,
                 evaluations=evaluations,

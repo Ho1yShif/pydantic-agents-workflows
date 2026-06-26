@@ -13,7 +13,24 @@ The pipeline processes questions through eight stages, with automatic quality ga
                                                     (iterate if needed)
 ```
 
-The stage logic below lives in [`backend/pipeline/`](../backend/pipeline/) and is unchanged.
+Conceptually the post-generation stages group into **three distinct verification capabilities**,
+each answering a different question and demonstrating a different Workflows pattern:
+
+| Capability | Stages | Question it answers |
+|------------|--------|---------------------|
+| **Grounding** | [4] Claims Extraction → [5] Claims Verification | Is every factual statement supported by the retrieved sources? |
+| **Accuracy** | [6] Technical Accuracy | Are there factual/technical errors? (errors + corrections drive the feedback loop) |
+| **Quality** | [7] Dual-Model Evaluation | How well does the answer serve the developer, and do two independent judges agree? |
+
+These are deliberately *not* redundant: Grounding checks claims against sources, Accuracy owns
+factual correctness, and Quality owns the developer experience (clarity, completeness, usefulness).
+
+Answer generation ([3]) is **neutral**: the assistant answers only from the retrieved context with
+no product-favorable steering in the prompt. Render-specific docs reach the model through retrieval
+and the curated-injection rules in [`retrieval.py`](../backend/pipeline/retrieval.py), not by being
+hard-coded into the generation instructions.
+
+The stage logic below lives in [`backend/pipeline/`](../backend/pipeline/).
 In production it executes as a **Render Workflows** run: the `run_qa_pipeline` orchestrator
 ([`workflows/app.py`](../workflows/app.py)) keeps the cheap stages (1, 2, 8) in-process and
 promotes the heavy LLM stages (3, 4, 5) to their own retried subtasks, with stages 6 + 7
@@ -104,7 +121,7 @@ For a technical deep-dive on hybrid search implementation, see [HYBRID_SEARCH.md
 
 ## Stage 3: Answer Generation
 
-**Purpose:** Generate comprehensive answer using retrieved context
+**Purpose:** Generate a comprehensive answer **neutrally** from the retrieved context — the prompt contains only grounding rules (use the context, don't invent, don't conflate product types), with no product-favorable steering
 
 **Model:** Claude Sonnet 4.6
 
@@ -133,6 +150,8 @@ async def generate_answer(question: str, context: str) -> dict:
 ---
 
 ## Stage 4: Claims Extraction
+
+**Capability:** Grounding (Stage 4 → Stage 5) — is every factual statement supported by the retrieved sources?
 
 **Purpose:** Extract verifiable factual claims from generated answer
 
@@ -171,7 +190,9 @@ async def generate_answer(question: str, context: str) -> dict:
 
 ## Stage 6: Technical Accuracy Check
 
-**Purpose:** Deep accuracy validation using Claude
+**Capability:** Accuracy — owns *factual correctness*
+
+**Purpose:** Deep factual-grounding validation using Claude. Judges only whether the answer is correct and grounded (not its style or completeness — that is Stage 7's job); its errors + corrections drive the refinement loop
 
 **Model:** Claude Sonnet 4.6
 
@@ -188,7 +209,9 @@ async def generate_answer(question: str, context: str) -> dict:
 
 ## Stage 7: Quality Rating (Dual-Model Evaluation)
 
-**Purpose:** Independent quality assessment from two models
+**Capability:** Quality — owns the *developer experience*
+
+**Purpose:** Independent quality assessment (clarity, completeness, usefulness) from two models running in parallel; factual verification is left to Stage 6, and the two judges' agreement is a confidence signal
 
 **Models:** OpenAI GPT-4o-mini + Anthropic Claude Sonnet 4.6
 

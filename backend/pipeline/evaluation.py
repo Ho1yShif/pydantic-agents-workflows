@@ -1,4 +1,9 @@
-"""Stage 7: Quality Rating (Dual-Model Evaluation)."""
+"""Quality: developer-experience evaluation (dual-model).
+
+The verification capability that owns *answer quality* — clarity, completeness, and
+actionability for the developer who asked. Two independent judges (OpenAI + Anthropic)
+score in parallel and their agreement is a confidence signal. Factual grounding is
+checked separately by the Accuracy stage, so this stage does not re-verify each fact."""
 
 from typing import List
 import asyncio
@@ -16,14 +21,17 @@ import logfire
 
 EVALUATION_INSTRUCTIONS = """You are a quality evaluator for technical documentation answers.
 
-Evaluate the answer on the following criteria and return a structured JSON assessment.
+Judge how well the answer SERVES THE DEVELOPER who asked the question — its clarity, structure,
+completeness of coverage, and actionability. Factual verification against the source documentation
+is handled by a separate accuracy stage, so focus on the quality and usefulness of the response
+rather than re-checking each fact. Return a structured JSON assessment.
 
 CRITICAL: If the answer essentially says "I don't know", "I can't answer", or "information not available",
 it should receive very low scores (0-20) across all criteria, regardless of how politely it's written.
 
 Scoring criteria:
-- technical_accuracy (0-100, weight 30%): Is the information correct and up-to-date?
-  Score 0-20 if answer says it lacks information.
+- technical_accuracy (0-100, weight 30%): Is the answer technically sound and internally consistent —
+  free of obviously contradictory or misleading statements? Score 0-20 if answer says it lacks information.
 - clarity (0-100, weight 25%): Is the answer well-structured and easy to understand?
   Score 0-20 if answer doesn't actually provide substantive information.
 - completeness (0-100, weight 25%): Does it fully address the question with specific details?
