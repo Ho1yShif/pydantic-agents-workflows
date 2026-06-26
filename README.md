@@ -2,7 +2,7 @@
 
 > Render Developer Q&A Assistant showcasing observable AI with Pydantic Agents, Pydantic Embedder, Logfire, and Render Workflows
 
-<a href="https://render.com/deploy?repo=https://github.com/render-examples/pydantic-agents">
+<a href="https://render.com/deploy?repo=https://github.com/render-examples/pydantic-agents-workflows">
   <img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" height="32">
 </a>
 
@@ -243,34 +243,6 @@ make add-ai-agent     # render.com/tutorials/agents-on-render-workflows (AI agen
 make add-autoscaling  # render.com/docs/scaling
 make add-nodejs       # render.com/docs/deploy-node-express-app
 ```
-
-### Manual Setup
-
-```bash
-# 1. Install Python dependencies (uv reads .python-version → 3.13)
-uv sync --group dev
-
-# 2. Configure environment
-cp .env.example .env
-# Edit .env with your API keys
-
-# 3. Start PostgreSQL with Docker
-docker-compose up -d
-
-# 4. Generate and load documentation
-uv run python data/scripts/generate_embeddings.py
-uv run python data/scripts/ingest_docs.py
-
-# 5. Run backend gateway (from project root)
-uv run uvicorn backend.main:app --reload --port 8000
-
-# 6. Run frontend (separate terminal)
-cd frontend && npm install && npm run dev
-```
-
-> **Note:** asking questions through the UI also needs the Workflows runtime running (e.g.
-> `render workflows dev …` with `RENDER_USE_LOCAL_DEV=true`) — see
-> [the local-workflows note above](#local-development-with-make).
 
 **Access locally:**
 
