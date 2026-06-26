@@ -15,11 +15,11 @@ from backend.pipeline.query_expansion import expand_query, should_expand_query
 import logfire
 
 
-# Curated docs are pinned at this score so they sort above semantic-search hits.
-# It is NOT a real similarity value — it marks a doc we deliberately surface for a
-# topic, not one the vector search found. Kept as a single named constant so the
-# behavior is explicit rather than disguised as a 0.95 match scattered everywhere.
-INJECTED_DOC_SCORE = 0.95
+# Score for an editorially-injected curated doc: the top of the cosine scale, so it
+# ranks first. It is NOT a measured similarity — it marks a doc we deliberately surface
+# for a topic. A curated doc is only injected when retrieval did NOT already find it
+# (see inject_curated_docs), so this never disguises a real search result.
+INJECTED_DOC_SCORE = 1.0
 
 # All pricing tables live under this source and are distinguished by title.
 PRICING_SOURCE = "https://render.com/pricing"
@@ -255,12 +255,17 @@ def detect_pricing_query(question: str) -> List[str]:
 
 async def inject_curated_docs(question: str, existing_docs: List[Document]) -> List[Document]:
     """
-    Prepend editorially-curated docs for topics that keyword-match the question.
+    Ensure the canonical doc for a matched topic is present — without padding the count.
 
-    Data-driven replacement for the old per-topic detect_*/inject_* pairs: every
-    rule (plus pricing's product logic) funnels through one fetch → parse → build
-    path. Curated docs are pinned at INJECTED_DOC_SCORE so they rank above semantic
-    hits, and a doc already present in the retrieved set is not injected again.
+    Data-driven replacement for the old per-topic detect_*/inject_* pairs: every rule
+    (plus pricing's product logic) funnels through one fetch → parse → build path.
+
+    Policy (replace-weakest, never grow past rag_top_k):
+      - If a topic's curated doc was already retrieved, leave it — retrieval found it.
+      - Otherwise insert it at the top (INJECTED_DOC_SCORE); if that pushes the set over
+        the rag_top_k ceiling, drop the lowest-ranked retrieved doc from the tail.
+    So curated docs are guaranteed-present and top-ranked, but the result count still
+    reflects retrieval's relevance gate rather than always sitting at the cap + 1.
     """
     question_lower = question.lower()
 
@@ -309,10 +314,23 @@ async def inject_curated_docs(question: str, existing_docs: List[Document]) -> L
                 continue
             injected.append(doc)
 
-    if injected:
-        logfire.info("Injected curated docs", count=len(injected))
-        return injected + existing_docs
-    return existing_docs
+    if not injected:
+        return existing_docs
+
+    # Insert curated docs at the top; cap at the rag_top_k ceiling, dropping the
+    # lowest-ranked retrieved docs from the tail (existing_docs is already in rank
+    # order, so the tail is the weakest).
+    combined = injected + existing_docs
+    dropped = max(0, len(combined) - settings.rag_top_k)
+    if dropped:
+        combined = combined[:settings.rag_top_k]
+    logfire.info(
+        "Injected curated docs (replace-weakest)",
+        injected=len(injected),
+        dropped_to_fit=dropped,
+        total_docs=len(combined),
+    )
+    return combined
 
 
 @instrument_stage(PipelineConfig.STAGE_RETRIEVAL)
@@ -353,7 +371,8 @@ async def retrieve_documents(embedding: List[float], original_question: str = No
         )
 
         # Retrieve documents for each query variation
-        all_docs = {}  # Dict for deduplication by content hash
+        all_docs = {}            # content hash -> Document (highest cosine kept)
+        original_hashes = set()  # content hashes that matched the original question
 
         # Calculate how many docs to retrieve per query
         # Target: ~30-40 total docs before dedup, then take top 20
@@ -378,28 +397,32 @@ async def retrieve_documents(embedding: List[float], original_question: str = No
             logfire.debug(f"Retrieved {len(docs)} docs for query {i+1}/{len(query_variations)}")
             total_cost += cost
 
-            # Deduplicate: Keep doc with highest similarity if duplicate content
+            # Deduplicate across variations: keep the highest cosine similarity seen
+            # for each piece of content. (query_expansion.py places the original
+            # question at index 0, the expanded variations after it.)
             for doc in docs:
                 # Use first 200 chars as content hash
                 content_hash = hash(doc.content[:200])
-
-                # Boost similarity for the ORIGINAL query, which query_expansion.py
-                # places at index 0 (`[question] + variations`). Similarity scores
-                # across different queries aren't directly comparable, so we give the
-                # user's actual question a 15% edge over the expanded variations.
-                if i == 0:  # Original question
-                    doc.similarity_score = doc.similarity_score * 1.15
+                if i == 0:
+                    original_hashes.add(content_hash)
 
                 if content_hash not in all_docs or doc.similarity_score > all_docs[content_hash].similarity_score:
                     all_docs[content_hash] = doc
 
-        # Sort by similarity and take top k
-        documents = sorted(all_docs.values(), key=lambda d: d.similarity_score, reverse=True)[:settings.rag_top_k]
+        # Order by cosine similarity; on ties, prefer docs that matched the original
+        # question over those found only by an expanded variation. (No score mutation —
+        # the per-variation hybrid_search already gated each result by threshold.)
+        ranked = sorted(
+            all_docs.items(),
+            key=lambda kv: (kv[1].similarity_score, kv[0] in original_hashes),
+            reverse=True,
+        )
+        documents = [doc for _, doc in ranked][:settings.rag_top_k]
 
         logfire.info(
             "Multi-query retrieval completed",
             num_queries=len(query_variations),
-            total_docs_before_dedup=sum(1 for _ in all_docs.values()),
+            total_docs_before_dedup=len(all_docs),
             final_docs=len(documents)
         )
     else:
@@ -414,18 +437,11 @@ async def retrieve_documents(embedding: List[float], original_question: str = No
             bm25_weight=0.4  # 60% semantic, 40% BM25 - favors semantic but includes keyword matches
         )
 
-    # Curated-doc injection: prepend authoritative docs for any topic the question
-    # keyword-matches (pricing tables, Workflows tutorial/docs, autoscaling, Node.js,
-    # tutorials index). Data-driven — see INJECTION_RULES.
+    # Curated-doc injection (replace-weakest): ensure the canonical doc for a matched
+    # topic is present and top-ranked, without padding the count past rag_top_k.
+    # Data-driven — see INJECTION_RULES / inject_curated_docs.
     if original_question:
-        pre_injection_count = len(documents)
         documents = await inject_curated_docs(original_question, documents)
-        if len(documents) > pre_injection_count:
-            logfire.info(
-                "Injected curated docs",
-                injected=len(documents) - pre_injection_count,
-                total_docs=len(documents),
-            )
 
     # Calculate average similarity
     avg_similarity = 0.0

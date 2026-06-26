@@ -1,7 +1,6 @@
 """Configuration settings for the Ask Render Anything Assistant."""
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -37,8 +36,11 @@ class Settings(BaseSettings):
     timeout_seconds: int = 30
     
     # RAG Configuration
-    rag_top_k: int = 20  # Increased to 20 for broader coverage of multi-product questions
-    similarity_threshold: float = 0.3  # Lowered from 0.5 for broader retrieval
+    rag_top_k: int = 20  # Ceiling on retrieved docs, not a fixed quota (see hybrid_search)
+    # Real relevance gate: a doc is returned only if its cosine similarity >= this value,
+    # so the result count varies with the question. Tune up (~0.4-0.5) if broad questions
+    # still return too many low-relevance docs; down if narrow questions return too few.
+    similarity_threshold: float = 0.3
     verification_threshold: float = 0.30  # Similarity threshold for claim verification (lowered to catch explicit facts)
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
