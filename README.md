@@ -80,13 +80,11 @@ This project is built end-to-end on the [Pydantic](https://pydantic.dev/) ecosys
 
 ### Render Capabilities
 
-- **Zero-Config Deployment** - Push to deploy with render.yaml
-- **PostgreSQL with pgvector + full-text** - Managed hybrid search database
 - **Render Workflows** - The Q&A pipeline and ingestion run as durable workflow tasks with per-task retries, timeouts, and cross-instance parallel fan-out
+- **PostgreSQL with pgvector + full-text** - Managed hybrid search database
 - **Web Service + Static Site** - FastAPI gateway + Next.js frontend
 - **Cron Jobs** - Scheduled ingestion refresh that triggers the workflow fan-out
-- **Environment Management** - Secure secrets handling
-- **Auto-Scaling** - Handle variable AI workloads
+- **Blueprint deploy + env groups** - `render.yaml` provisions everything; shared config lives in two env groups
 
 ---
 
@@ -223,11 +221,9 @@ make run-backend
 make run-frontend
 ```
 
-> **Asking questions locally needs the Workflows runtime running too.** The backend is a thin
-> gateway — `POST /ask` delegates to a Workflows service. With nothing to delegate to it returns
-> `503 WORKFLOW_SLUG is not configured`. You can run the whole stack locally with **no Render
-> cloud resources and no API key** — the pipeline runs on your machine against your local
-> Postgres:
+> **Asking questions locally needs the Workflows runtime too.** `POST /ask` delegates to a
+> Workflows service; with nothing to delegate to it returns `503 WORKFLOW_SLUG is not configured`.
+> Run the whole stack locally — no Render cloud resources, no API key — with a local dev server:
 >
 > ```bash
 > # Terminal 1 — local workflow dev server (loads .env, listens on :8120)
@@ -241,25 +237,17 @@ make run-frontend
 > cd frontend && npm run dev
 > ```
 >
-> `RENDER_USE_LOCAL_DEV=true` makes the SDK target `http://localhost:8120` (the dev server)
-> instead of Render's cloud, with no token required. `WORKFLOW_SLUG=local` can be any non-empty
-> value — it just satisfies the gateway's guard; the dev server resolves the task by name. Set
-> both in your `.env` to avoid prefixing each command. Because the workflow runs locally against
-> the same `DATABASE_URL`, the **History** tab populates normally.
->
-> *(Alternatively, point the local gateway at a deployed cloud Workflows service by setting
-> `RENDER_API_KEY` + the real `WORKFLOW_SLUG` instead of `RENDER_USE_LOCAL_DEV`. In that case the
-> cloud workflow writes to its own database, so local History only matches if the gateway uses
-> that same database.)*
+> `RENDER_USE_LOCAL_DEV=true` points the SDK at `http://localhost:8120` instead of Render's cloud
+> (no token needed); `WORKFLOW_SLUG=local` just satisfies the gateway's guard. Set both in `.env`
+> to skip the prefixes. The workflow runs against your local `DATABASE_URL`, so **History**
+> populates normally. *(Alternatively, set `RENDER_API_KEY` + the real `WORKFLOW_SLUG` to target a
+> deployed cloud Workflows service, which writes to its own database.)*
 
-> **Local config → deployed env groups.** Locally, every process reads from one `.env`
-> (copied from [`.env.example`](./.env.example)). When you deploy, that same `.env` splits into
-> the two Render env groups in [`render.yaml`](./render.yaml): the LLM/Logfire secrets +
-> pipeline/RAG/model config become **`pydantic-agents-workflows-pipeline`**, and `RENDER_API_KEY` / `WORKFLOW_SLUG`
-> become **`pydantic-agents-workflows-pipeline-trigger`**. So editing `.env` is the local equivalent of editing a group —
-> see [Deploy → Environment groups](#environment-groups). The local-only knobs
-> (`RENDER_USE_LOCAL_DEV`, `DATABASE_URL` pointing at Docker Postgres) don't go in any group:
-> in the cloud the SDK uses the platform socket and `DATABASE_URL` is injected from the database.
+> **Local config → deployed env groups.** Locally every process reads one `.env` (copied from
+> [`.env.example`](./.env.example)). On deploy that same config splits into the two Render env
+> groups in [`render.yaml`](./render.yaml) — see [Deploy → Environment groups](#environment-groups).
+> Local-only knobs (`RENDER_USE_LOCAL_DEV`, the Docker `DATABASE_URL`) aren't in any group; in the
+> cloud the SDK uses the platform socket and `DATABASE_URL` is injected from the database.
 
 `make ingest` runs the full pipeline: bulk doc embeddings, plus the curated "special pages" that get explicit-injection into RAG context (pricing, AI agent, autoscaling, Node.js). To re-load just one of those after editing its script, use the per-target shortcuts:
 
@@ -353,9 +341,6 @@ hand-created Workflows service (step 3) replaces pasting ~20 variables by hand. 
 stays per-service (it's injected from the database, which can't live in a group), and the
 frontend's `NEXT_PUBLIC_API_URL` stays inline (unique, build-time).
 
-> **Note:** Blueprints (`render.yaml`) don't yet support Render Workflows, so the
-> **Workflows service** that runs the pipeline is created separately in step 3.
-
 ### 3. Create the Workflows service
 
 Blueprints (`render.yaml`) can't create Workflows yet, so do this once in the Dashboard.
@@ -402,10 +387,10 @@ Blueprints (`render.yaml`) can't create Workflows yet, so do this once in the Da
    > internal connection string and auto-updates if creds rotate. Pasting a literal URL (into the
    > service or the group) is a static snapshot that breaks on rotation — avoid it.
 
-The four secrets in `pydantic-agents-workflows-pipeline` (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `LOGFIRE_TOKEN`,
-`LOGFIRE_READ_TOKEN`) are **required** — the service crashes on startup without the first three
-(they have no defaults in [`backend/config.py`](./backend/config.py)). You set them once when
-applying the Blueprint (step 2); linking the group here reuses those same values.
+The group's four secrets (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `LOGFIRE_TOKEN`,
+`LOGFIRE_READ_TOKEN`) are set once when applying the Blueprint (step 2) and reused here by linking
+the group — the first three are required and the service crashes on startup without them
+(no defaults in [`backend/config.py`](./backend/config.py)).
 
 **End state — the Workflows service environment:**
 

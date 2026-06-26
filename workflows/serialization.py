@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.models import Claim, Document, EvaluationResult, PipelineStageResult
+from backend.models import Claim, Document
 
 
 # --- Claims -----------------------------------------------------------------
@@ -39,22 +39,3 @@ def documents_to_json(documents: list[Document]) -> list[dict[str, Any]]:
 def documents_from_json(data: list[dict[str, Any]]) -> list[Document]:
     """Rehydrate ``Document`` objects."""
     return [Document.model_validate(d) for d in data]
-
-
-# --- Evaluations ------------------------------------------------------------
-
-def evaluations_to_json(evaluations: list[EvaluationResult]) -> list[dict[str, Any]]:
-    """Serialize dual-model ``EvaluationResult`` objects."""
-    return [e.model_dump(mode="json") for e in evaluations]
-
-
-def evaluations_from_json(data: list[dict[str, Any]]) -> list[EvaluationResult]:
-    """Rehydrate ``EvaluationResult`` objects (needed by the quality gate)."""
-    return [EvaluationResult.model_validate(e) for e in data]
-
-
-# --- Pipeline stages --------------------------------------------------------
-
-def stages_to_json(stages: list[PipelineStageResult]) -> list[dict[str, Any]]:
-    """Serialize per-stage observability results for the final response."""
-    return [s.model_dump(mode="json") for s in stages]

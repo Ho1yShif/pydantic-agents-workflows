@@ -70,32 +70,10 @@ async def quality_gate_decision(
         
         feedback = "\n".join(feedback_parts)
     
-    # NOTE: Accuracy threshold check DISABLED
-    # Empirical testing showed accuracy scoring is unreliable:
-    # - Score dropped from 75 to 25 after iteration (with 96% verification!)
-    # - High variance even with temperature=0
-    # - Causes unnecessary iterations that degrade quality
-    # - First iteration is usually the best answer
-    # We keep accuracy checking for monitoring/logging, but don't gate on it
-    
-    # elif accuracy_score < settings.accuracy_threshold:
-    #     should_iterate = True
-    #     reason = f"Accuracy score {accuracy_score} below threshold {settings.accuracy_threshold}"
-    #     
-    #     feedback_parts = [
-    #         f"Accuracy score: {accuracy_score}/100 (threshold: {settings.accuracy_threshold})"
-    #     ]
-    #     
-    #     if errors:
-    #         feedback_parts.append("\nIdentified errors:")
-    #         feedback_parts.extend([f"- {error}" for error in errors[:3]])
-    #     
-    #     if corrections:
-    #         feedback_parts.append("\nSuggested corrections:")
-    #         feedback_parts.extend([f"- {correction}" for correction in corrections[:3]])
-    #     
-    #     feedback = "\n".join(feedback_parts)
-    
+    # Accuracy is tracked for observability but intentionally NOT gated on:
+    # empirically the score is noisy (swung 75 -> 25 across iterations even at
+    # temperature=0) and gating on it triggered re-iterations that degraded quality.
+
     # Check for significant disagreement between evaluators
     elif len(evaluations) >= 2:
         score_diff = abs(evaluations[0].score - evaluations[1].score)

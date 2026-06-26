@@ -77,6 +77,37 @@ async def _ensure_ready(db: bool = False) -> None:
         await vector_store.initialize()
 
 
+def _stage_result(
+    stage: str,
+    *,
+    cost_usd: float,
+    iteration: int | None = None,
+    duration_ms: float = 0.0,
+    tokens_used: int | None = None,
+    model: str | None = None,
+    metadata: dict | None = None,
+) -> PipelineStageResult:
+    """Build a successful ``PipelineStageResult`` for the observability trail.
+
+    When ``iteration`` is given, it is appended to the stage name as
+    ``_iter_{n}`` and folded into ``metadata`` — so the stage-naming convention
+    lives here and each call site stays a single line.
+    """
+    meta = dict(metadata or {})
+    if iteration is not None:
+        stage = f"{stage}_iter_{iteration}"
+        meta["iteration"] = iteration
+    return PipelineStageResult(
+        stage=stage,
+        success=True,
+        duration_ms=duration_ms,
+        cost_usd=cost_usd,
+        tokens_used=tokens_used,
+        model=model,
+        metadata=meta,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Q&A pipeline — per-stage subtasks
 #
@@ -153,9 +184,11 @@ async def rate_quality_anthropic_task(question: str, answer: str, doc_count: int
 async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
     """Orchestrate the full 8-stage Q&A pipeline as one workflow run.
 
-    Mirrors the original ``backend.main.execute_pipeline`` loop, but the
-    accuracy + dual-eval stage fans out to subtasks. Returns the
-    ``AnswerResponse`` as a JSON-serializable dict.
+    Runs embedding and retrieval in-process, then loops generation → claims →
+    verification → (accuracy + dual-model evaluation) → quality gate up to
+    ``settings.max_iterations`` times, refining with feedback when the gate
+    fails. The accuracy and two evaluation stages fan out to parallel subtasks.
+    Returns the ``AnswerResponse`` as a JSON-serializable dict.
     """
     await _ensure_ready(db=True)
 
@@ -166,10 +199,8 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
 
         # Stage 1: Question embedding
         embed_result = await embed_question(question)
-        stages.append(PipelineStageResult(
-            stage="question_embedding",
-            success=True,
-            duration_ms=0,
+        stages.append(_stage_result(
+            "question_embedding",
             cost_usd=embed_result["cost_usd"],
             tokens_used=embed_result["tokens"],
             model=settings.embedding_model,
@@ -181,10 +212,8 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
         retrieval_result = await retrieve_documents(
             embed_result["embedding"], original_question=question
         )
-        stages.append(PipelineStageResult(
-            stage="rag_retrieval",
-            success=True,
-            duration_ms=0,
+        stages.append(_stage_result(
+            "rag_retrieval",
             cost_usd=retrieval_result["cost_usd"],
             model=settings.query_expansion_model,
             metadata={
@@ -209,28 +238,26 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
 
             # Stage 3: Answer generation (own retried task)
             gen_result = await generate_answer_task(question, documents_to_json(documents), feedback)
-            stages.append(PipelineStageResult(
-                stage=f"answer_generation_iter_{current_iteration}",
-                success=True,
-                duration_ms=0,
+            stages.append(_stage_result(
+                "answer_generation",
+                iteration=current_iteration,
                 cost_usd=gen_result["cost_usd"],
                 tokens_used=gen_result["input_tokens"] + gen_result["output_tokens"],
                 model=settings.answer_model,
-                metadata={"answer_length": len(gen_result["answer"]), "iteration": current_iteration},
+                metadata={"answer_length": len(gen_result["answer"])},
             ))
             total_cost += gen_result["cost_usd"]
             answer_text = gen_result["answer"]
 
             # Stage 4: Claims extraction (own retried task)
             claims_result = await extract_claims_task(answer_text)
-            stages.append(PipelineStageResult(
-                stage=f"claims_extraction_iter_{current_iteration}",
-                success=True,
-                duration_ms=0,
+            stages.append(_stage_result(
+                "claims_extraction",
+                iteration=current_iteration,
                 cost_usd=claims_result["cost_usd"],
                 tokens_used=claims_result["input_tokens"] + claims_result["output_tokens"],
                 model=settings.claims_model,
-                metadata={"claims_extracted": len(claims_result["claims"]), "iteration": current_iteration},
+                metadata={"claims_extracted": len(claims_result["claims"])},
             ))
             total_cost += claims_result["cost_usd"]
 
@@ -239,24 +266,22 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
             verified_claims = claims_from_json(verification_result["verified_claims"])
             verification_rate = verification_result["verification_rate"] * 100
             verified_count = len([c for c in verified_claims if c.verified])
-            stages.append(PipelineStageResult(
-                stage=f"claims_verification_iter_{current_iteration}",
-                success=True,
-                duration_ms=0,
+            stages.append(_stage_result(
+                "claims_verification",
+                iteration=current_iteration,
                 cost_usd=verification_result["cost_usd"],
                 model=settings.embedding_model,
                 metadata={
                     "claims_verified": verified_count,
                     "total_claims": len(verified_claims),
                     "verification_rate": f"{verification_rate:.0f}%",
-                    "iteration": current_iteration,
                 },
             ))
             total_cost += verification_result["cost_usd"]
 
             # Stages 6 + 7: accuracy + the two quality judges — three subtasks on
-            # three parallel instances. Combine (average + agreement) here, mirroring
-            # evaluate_quality (evaluation.py:155-185), reusing build_evaluation_result.
+            # three parallel instances. The average score and inter-judge agreement
+            # are combined here (the judges already ran through build_evaluation_result).
             stage_start = time.time()
             accuracy_result, openai_rate, anthropic_rate = await asyncio.gather(
                 check_accuracy_task(answer_text, claims_to_json(verified_claims)),
@@ -273,19 +298,19 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
             score_difference = abs(openai_eval.score - anthropic_eval.score)
             agreement_level = "high" if score_difference <= 5 else "medium" if score_difference <= 15 else "low"
             eval_cost = openai_rate["cost_usd"] + anthropic_rate["cost_usd"]
-            stages.append(PipelineStageResult(
-                stage=f"technical_accuracy_iter_{current_iteration}",
-                success=True,
+            stages.append(_stage_result(
+                "technical_accuracy",
+                iteration=current_iteration,
                 duration_ms=parallel_duration,
                 cost_usd=accuracy_result["cost_usd"],
                 tokens_used=accuracy_result["input_tokens"] + accuracy_result["output_tokens"],
                 model=settings.accuracy_model,
-                metadata={"accuracy_score": accuracy_score, "iteration": current_iteration},
+                metadata={"accuracy_score": accuracy_score},
             ))
             total_cost += accuracy_result["cost_usd"]
-            stages.append(PipelineStageResult(
-                stage=f"quality_evaluation_iter_{current_iteration}",
-                success=True,
+            stages.append(_stage_result(
+                "quality_evaluation",
+                iteration=current_iteration,
                 duration_ms=parallel_duration,
                 cost_usd=eval_cost,
                 model=f"{settings.eval_model_openai} + {settings.eval_model_anthropic}",
@@ -294,7 +319,6 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
                     "openai_score": openai_eval.score,
                     "claude_score": anthropic_eval.score,
                     "agreement": agreement_level,
-                    "iteration": current_iteration,
                 },
             ))
             total_cost += eval_cost
@@ -308,15 +332,13 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
                 errors=accuracy_result["errors"],
                 corrections=accuracy_result["corrections"],
             )
-            stages.append(PipelineStageResult(
-                stage=f"quality_gate_iter_{current_iteration}",
-                success=True,
-                duration_ms=0,
+            stages.append(_stage_result(
+                "quality_gate",
+                iteration=current_iteration,
                 cost_usd=0.0,
                 metadata={
                     "should_iterate": gate_result["should_iterate"],
                     "reason": gate_result["reason"],
-                    "iteration": current_iteration,
                 },
             ))
 
@@ -395,6 +417,15 @@ async def _persist_session(response: AnswerResponse) -> str | None:
 # Ingestion — parallel fan-out (replaces the sequential preDeployCommand)
 # ---------------------------------------------------------------------------
 
+async def _run_ingest_script(module_name: str) -> dict:
+    """Import ``data.scripts.<module_name>``, run its ``main()``, report status."""
+    import importlib
+
+    module = importlib.import_module(f"data.scripts.{module_name}")
+    await module.main()
+    return {"task": module_name, "status": "ok"}
+
+
 @app.task(timeout_seconds=1800)
 async def ingest_core() -> dict:
     """Core documentation ingest (additive sync). Establishes the base schema/rows."""
@@ -404,52 +435,43 @@ async def ingest_core() -> dict:
     return {"task": "ingest_core", "status": "ok"}
 
 
+# Each page injector is its own named, retried task so the fan-out below can run
+# it on a separate instance — the bodies just delegate to _run_ingest_script.
+
 @app.task
 async def add_pricing() -> dict:
-    from data.scripts import add_pricing_page
-
-    await add_pricing_page.main()
-    return {"task": "add_pricing", "status": "ok"}
+    """Inject the pricing page."""
+    return await _run_ingest_script("add_pricing_page")
 
 
 @app.task
 async def add_workflows_tutorial() -> dict:
-    from data.scripts import add_workflows_tutorial_page
-
-    await add_workflows_tutorial_page.main()
-    return {"task": "add_workflows_tutorial", "status": "ok"}
+    """Inject the Workflows tutorial page."""
+    return await _run_ingest_script("add_workflows_tutorial_page")
 
 
 @app.task
 async def add_workflows_docs() -> dict:
-    from data.scripts import add_workflows_docs_page
-
-    await add_workflows_docs_page.main()
-    return {"task": "add_workflows_docs", "status": "ok"}
+    """Inject the Workflows docs page."""
+    return await _run_ingest_script("add_workflows_docs_page")
 
 
 @app.task
 async def add_autoscaling() -> dict:
-    from data.scripts import add_autoscaling_page
-
-    await add_autoscaling_page.main()
-    return {"task": "add_autoscaling", "status": "ok"}
+    """Inject the autoscaling page."""
+    return await _run_ingest_script("add_autoscaling_page")
 
 
 @app.task
 async def add_nodejs() -> dict:
-    from data.scripts import add_nodejs_page
-
-    await add_nodejs_page.main()
-    return {"task": "add_nodejs", "status": "ok"}
+    """Inject the Node.js page."""
+    return await _run_ingest_script("add_nodejs_page")
 
 
 @app.task
 async def add_tutorials_index() -> dict:
-    from data.scripts import add_tutorials_index_page
-
-    await add_tutorials_index_page.main()
-    return {"task": "add_tutorials_index", "status": "ok"}
+    """Inject the tutorials index page."""
+    return await _run_ingest_script("add_tutorials_index_page")
 
 
 @app.task(timeout_seconds=3600)
