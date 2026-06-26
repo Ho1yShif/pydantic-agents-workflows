@@ -2,12 +2,11 @@
 
 import asyncpg
 from typing import Optional
-import numpy as np
 import json
 from contextlib import asynccontextmanager
 
 from backend.config import settings
-from backend.models import Document, DocumentChunk
+from backend.models import Document
 import logfire
 
 
@@ -326,14 +325,17 @@ class VectorStore:
             for rank, row in enumerate(semantic_rows, start=1):
                 doc_id = row['id']
                 semantic_rrf = 1.0 / (rrf_k + rank)
-                
+
                 if doc_id not in doc_scores:
                     doc_scores[doc_id] = {
                         'semantic_rrf': 0.0,
                         'bm25_rrf': 0.0,
+                        # Carry the true cosine similarity (0-1) so it stays interpretable;
+                        # RRF below is used only for *ordering*, never as the returned score.
+                        'cosine': float(row['similarity_score']),
                         'row': row
                     }
-                
+
                 doc_scores[doc_id]['semantic_rrf'] = semantic_rrf
             
             # Add BM25 search rankings
@@ -345,7 +347,7 @@ class VectorStore:
                     # This doc was in BM25 but not semantic results
                     # Fetch the semantic score for it
                     semantic_row = await conn.fetchrow("""
-                        SELECT 
+                        SELECT
                             id,
                             content,
                             source,
@@ -356,16 +358,19 @@ class VectorStore:
                         FROM documents
                         WHERE id = $2
                     """, embedding_str, doc_id)
-                    
+
                     doc_scores[doc_id] = {
                         'semantic_rrf': 0.0,
                         'bm25_rrf': 0.0,
+                        # A BM25-only hit's cosine may be low; if we can't fetch it, 0.0
+                        # keeps it out of the relevance gate below.
+                        'cosine': float(semantic_row['similarity_score']) if semantic_row else 0.0,
                         'row': semantic_row or row
                     }
-                
+
                 doc_scores[doc_id]['bm25_rrf'] = bm25_rrf
             
-            # Combine scores with weights
+            # Combine scores with weights (RRF is used only to ORDER the fused set)
             ranked_docs = []
             for doc_id, scores in doc_scores.items():
                 # Weighted RRF combination
@@ -373,25 +378,32 @@ class VectorStore:
                     (1 - bm25_weight) * scores['semantic_rrf'] +
                     bm25_weight * scores['bm25_rrf']
                 )
-                
-                ranked_docs.append((combined_score, scores['row']))
-            
-            # Sort by combined score (descending)
-            ranked_docs.sort(key=lambda x: x[0], reverse=True)
-            
-            # Take top k and convert to Document objects
+
+                ranked_docs.append((combined_score, scores['cosine'], scores['row']))
+
+            # Relevance gate: keep only docs whose cosine similarity clears the
+            # threshold. This is applied to the FINAL set (not just the semantic
+            # candidate pool), so the number of results reflects how relevant the
+            # corpus actually is to the question — it is no longer a fixed quota.
+            # Tradeoff: a purely-lexical BM25 hit with low semantic similarity is
+            # dropped here; `similarity_threshold` is the knob for that.
+            gated = [t for t in ranked_docs if t[1] >= threshold]
+
+            # Order survivors by the hybrid RRF score, then cap at k (a ceiling).
+            gated.sort(key=lambda x: x[0], reverse=True)
+
+            # Convert to Document objects, reporting the interpretable cosine score.
             documents = []
-            for combined_score, row in ranked_docs[:k]:
+            for combined_score, cosine, row in gated[:k]:
                 # Parse metadata if it's a string
                 metadata = row['metadata']
                 if isinstance(metadata, str):
                     metadata = json.loads(metadata)
-                
-                # Use combined RRF score as similarity_score
+
                 doc = Document(
                     content=row['content'],
                     source=row['source'],
-                    similarity_score=float(combined_score),
+                    similarity_score=float(cosine),
                     metadata={
                         'title': row['title'],
                         'section': row['section'],
@@ -399,13 +411,16 @@ class VectorStore:
                     }
                 )
                 documents.append(doc)
-            
+
             logfire.info(
                 "Hybrid search completed",
+                candidates=len(ranked_docs),
+                passed_threshold=len(gated),
                 final_count=len(documents),
+                threshold=threshold,
                 top_score=documents[0].similarity_score if documents else 0.0
             )
-            
+
             return documents
     
     async def get_document_count(self) -> int:
