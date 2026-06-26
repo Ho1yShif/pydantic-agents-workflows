@@ -36,10 +36,11 @@ This is an **AI-powered Q&A assistant for Render documentation**. Users can ask 
 ### Key Features
 
 - **Hybrid search** - Combines semantic understanding with keyword matching for better retrieval
-- **Multi-stage verification** - Extracts claims, verifies against docs, checks technical accuracy
+- **Three verification capabilities** - Each answer goes through *Grounding* (extract claims, verify them against the retrieved sources), *Accuracy* (a factual-correctness review), and *Quality* (a dual-model developer-experience rating) — distinct checks, not redundant ones
+- **Neutral, grounded answers** - The assistant answers only from retrieved documentation, with no product-favorable steering in the prompt; relevant Render docs surface through retrieval, not by being force-sold
 - **Iterative refinement** - Automatically regenerates low-quality answers with feedback
 - **Cost tracking** - See exactly how much each question costs to answer
-- **Parallel fan-out** - The pipeline runs on [Render Workflows](https://render.com/docs/workflows), fanning out the heaviest stages (technical accuracy + dual-model evaluation) across instances so they execute concurrently
+- **Parallel fan-out** - The pipeline runs on [Render Workflows](https://render.com/docs/workflows), fanning out the Accuracy + dual-model Quality checks across instances so they execute concurrently
 
 ---
 
@@ -101,15 +102,15 @@ The frontend connects to a backend FastAPI gateway that triggers a **Render Work
 │  Render Workflows service  (Python 3.13)                    │
 │  Orchestrator: run_qa_pipeline                              │
 │  ┌────────────────────────────────────────────────────────┐ │
-│  │ [1] Question Embedding      (OpenAI)        in-process  │ │
-│  │ [2] RAG Document Retrieval  (pgvector+BM25) in-process  │ │
-│  │ [3] Answer Generation       (Claude)        ⟶ subtask   │ │
-│  │ [4] Claims Extraction       (GPT)           ⟶ subtask   │ │
-│  │ [5] Claims Verification     (RAG again)     ⟶ subtask   │ │
-│  │ [6] Technical Accuracy      (Claude)    ┐               │ │
-│  │ [7] Quality Rating          (OpenAI+    ├─ 3 parallel   │ │
-│  │                              Anthropic) ┘   subtasks    │ │
-│  │ [8] Quality Gate            (Pass or Iterate) in-process │ │
+│  │ Retrieval  [1] Question Embedding  (OpenAI)  in-process │ │
+│  │            [2] RAG Retrieval (pgvector+BM25)  in-process │ │
+│  │ Generate   [3] Answer Generation   (Claude)   ⟶ subtask  │ │
+│  │ Grounding  [4] Claims Extraction   (GPT)      ⟶ subtask  │ │
+│  │            [5] Claims Verification (RAG)       ⟶ subtask  │ │
+│  │ Accuracy   [6] Factual-grounding   (Claude) ┐            │ │
+│  │ Quality    [7] Dual-model rating   (OpenAI+ ├─ 3 parallel│ │
+│  │                                    Anthropic)┘  subtasks  │ │
+│  │ Gate       [8] Quality Gate (Pass or Iterate) in-process │ │
 │  └────────────────────────────────────────────────────────┘ │
 │  Ingestion: ingest_all → ingest_core, then 6 add_* in       │
 │             parallel (replaces the old serial preDeploy)    │

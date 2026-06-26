@@ -1,4 +1,9 @@
-"""Stage 6: Technical Accuracy Check."""
+"""Accuracy: factual-grounding check.
+
+The verification capability that owns *factual correctness*. It judges whether the
+answer is grounded in the documentation (via the extracted + verified claims) and
+emits errors/corrections that feed the refinement loop. Answer style, structure, and
+completeness are out of scope here — those are judged by the Quality stage."""
 
 from typing import List
 from pydantic_ai import Agent
@@ -11,17 +16,19 @@ from backend.observability import instrument_stage, calculate_anthropic_cost
 import logfire
 
 
-ACCURACY_CHECK_INSTRUCTIONS = """You are a technical accuracy reviewer for Render documentation.
+ACCURACY_CHECK_INSTRUCTIONS = """You are the technical-accuracy reviewer for Render documentation answers.
 
-Evaluate the technical accuracy of an answer against verified claims and return a structured assessment.
+Your job — and only your job — is to judge whether the answer is FACTUALLY CORRECT and GROUNDED in the documentation. Clarity, structure, verbosity, and completeness are evaluated separately by the quality stage; do not penalize the answer for those here.
+
+You are given the answer plus the claims extracted from it and their verification results. Use them to assess factual grounding and return a structured assessment.
 
 Evaluation Criteria:
-- If most claims are verified (70%+), the answer is likely accurate (accuracy_score 90-100)
+- If most claims are verified (70%+) and nothing is invented, the answer is likely accurate (accuracy_score 90-100)
 - CRITICAL: If the answer contains invented information (plan names, features, prices NOT in documentation), score 0-30
 - Check for conflation errors (e.g., mixing workspace plans with database plans) - score 20-40 if found
 - Verified claims with high similarity scores indicate strong documentation support
-- Only penalize for actual technical errors or misleading information
-- Minor omissions or lack of detail should not heavily penalize the score
+- Only penalize for actual technical errors, invented facts, or misleading information
+- Minor omissions or lack of detail should not penalize the score (that is the quality stage's concern)
 
 RED FLAGS to check for:
 - Invented plan names or tiers not verified by documentation
