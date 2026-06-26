@@ -1,6 +1,6 @@
 # Pydantic Agents
 
-> Render Developer Q&A Assistant showcasing observable AI with Pydantic Agents, Pydantic Embedder, Logfire, and Render
+> Render Developer Q&A Assistant showcasing observable AI with Pydantic Agents, Pydantic Embedder, Logfire, and Render Workflows
 
 <a href="https://render.com/deploy?repo=https://github.com/render-examples/pydantic-agents">
   <img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" height="32">
@@ -41,21 +41,17 @@ This is an **AI-powered Q&A assistant for Render documentation**. Users can ask 
 - **Cost tracking** - See exactly how much each question costs to answer
 - **Parallel fan-out** - The pipeline runs on [Render Workflows](https://render.com/docs/workflows), fanning out the heaviest stages (technical accuracy + dual-model evaluation) across instances so they execute concurrently
 
-### Example Questions
-
-```
-"How do I set up PostgreSQL on Render?"
-"What's the difference between Web Services and Static Sites?"
-"How much does a Starter plan cost?"
-"Can I use custom domains with Render?"
-"How do I configure environment variables?"
-```
-
-The app answers questions about deployment, databases, pricing, configuration, networking, and all other Render platform features based on ~10,000 documentation chunks.
-
 ---
 
 ## What This Demonstrates
+
+### Render Capabilities
+
+- **Render Workflows** - The Q&A pipeline and ingestion run as durable workflow tasks with per-task retries, timeouts, and cross-instance parallel fan-out
+- **PostgreSQL with pgvector + full-text** - Managed hybrid search database
+- **Web Service + Static Site** - FastAPI gateway + Next.js frontend
+- **Cron Jobs** - Scheduled ingestion refresh that triggers the workflow fan-out
+- **Blueprint deploy + env groups** - `render.yaml` provisions everything; shared config lives in two env groups
 
 ### Logfire Features
 
@@ -78,21 +74,11 @@ This project is built end-to-end on the [Pydantic](https://pydantic.dev/) ecosys
 - **[Pydantic GenAI Prices](https://github.com/pydantic/genai-prices)** — model pricing is loaded dynamically from the `pydantic/genai-prices` registry, then combined with per-agent token counts from `result.usage()` to produce per-stage cost attribution. See [`backend/prices.py`](./backend/prices.py).
 - **[Logfire](https://logfire.pydantic.dev/)** — distributed traces, custom metrics, dual-model evals, and cost attribution. Auto-instruments FastAPI, AsyncPG, HTTPX, and Pydantic AI. See [`backend/observability.py`](./backend/observability.py).
 
-### Render Capabilities
-
-- **Render Workflows** - The Q&A pipeline and ingestion run as durable workflow tasks with per-task retries, timeouts, and cross-instance parallel fan-out
-- **PostgreSQL with pgvector + full-text** - Managed hybrid search database
-- **Web Service + Static Site** - FastAPI gateway + Next.js frontend
-- **Cron Jobs** - Scheduled ingestion refresh that triggers the workflow fan-out
-- **Blueprint deploy + env groups** - `render.yaml` provisions everything; shared config lives in two env groups
-
 ---
 
 ## Architecture
 
-The pipeline no longer runs inside the web service. The web service is now a **thin
-FastAPI gateway** that triggers a **Render Workflows** run and polls it for the result;
-the 8-stage pipeline and ingestion execute as workflow tasks that fan out across instances.
+The frontend connects to a backend FastAPI gateway that triggers a **Render Workflows** run and polls it for the result. The 8-stage pipeline and ingestion execute as workflow tasks that fan out across instances.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -221,9 +207,9 @@ make run-backend
 make run-frontend
 ```
 
-> **Asking questions locally needs the Workflows runtime too.** `POST /ask` delegates to a
+> **Asking questions locally requires a deployed Workflow for now.** `POST /ask` delegates to a
 > Workflows service; with nothing to delegate to it returns `503 WORKFLOW_SLUG is not configured`.
-> Run the whole stack locally — no Render cloud resources, no API key — with a local dev server:
+> But you can run the rest of the stack locally — no Render cloud resources, no API key — with a local dev server:
 >
 > ```bash
 > # Terminal 1 — local workflow dev server (loads .env, listens on :8120)
@@ -257,8 +243,6 @@ make add-ai-agent     # render.com/tutorials/agents-on-render-workflows (AI agen
 make add-autoscaling  # render.com/docs/scaling
 make add-nodejs       # render.com/docs/deploy-node-express-app
 ```
-
-When a developer asks "How do I deploy an AI agent on Render?", the only context injected is the [Render Workflows agents tutorial](https://render.com/tutorials/agents-on-render-workflows/what-youll-build) — bringing home the canonical answer: the best way to run AI agents on Render is Render Workflows.
 
 ### Manual Setup
 
@@ -400,11 +384,6 @@ DATABASE_URL    → from pydantic-agents-workflows-db   # per-service bind, not 
 PYTHON_VERSION  = 3.13
 ```
 
-> **Don't link `pydantic-agents-workflows-pipeline-trigger` to the Workflows service.** `RENDER_API_KEY` / `WORKFLOW_SLUG`
-> are only for the gateway/cron that *trigger* it from outside. The workflow fans out its own
-> subtasks over the platform-injected socket, so it never calls the public API. Likewise, leave
-> the platform-injected `RENDER_SDK_MODE` / `RENDER_SDK_SOCKET_PATH` alone.
-
 **3d. Create the service** and wait for the first deploy to finish. Then copy the service's
 **slug** (shown on its Dashboard page / in its URL, e.g. `pydantic-agents-workflow`) — you'll
 set it as `WORKFLOW_SLUG` in the `pydantic-agents-workflows-pipeline-trigger` group in step 4, which the gateway and cron
@@ -465,66 +444,14 @@ The Workflows service has no documents until ingestion runs. Trigger it once to 
 render workflows start ingest_all   # or trigger from the Dashboard
 ```
 
-- Gateway: `https://pydantic-agents-workflows-api.onrender.com`
-- Frontend: `https://pydantic-agents-workflows-frontend.onrender.com`
-
-Ingestion now runs as the `ingest_all` workflow task instead of a `preDeployCommand`. It loads
-the bulk corpus first (`ingest_core`), then fans out the curated special pages
-(`add_pricing`, `add_workflows_tutorial`, `add_workflows_docs`, `add_autoscaling`, `add_nodejs`,
-`add_tutorials_index`) in parallel. The `pydantic-agents-workflows-ingest` cron re-triggers it daily so
-canonical answers stay in sync with the latest source pages.
-
 ### 7. (Optional) Smoke-test the pipeline from the Dashboard
 
-Once the corpus is seeded, you can run the Q&A pipeline directly — no frontend needed. In the
+Once the corpus is seeded, you can run the Q&A pipeline directly in the [Render dashboard](https://dashboard.render.com) — no frontend needed. In the
 **Workflows service → Tasks**, start the **`run_qa_pipeline`** task with this input:
 
 ```json
 { "question": "How do I deploy an AI agent on Render?" }
 ```
-
-(`session_id` is optional.) The run fans out through answer generation, claims extraction +
-verification, accuracy, and dual quality rating; the output includes the answer and its scores.
-This is the canonical demo question — the curated Render Workflows tutorial is the only context
-injected, so the answer lands on: **the best way to run AI agents on Render is Render Workflows.**
-
----
-
-## Example Metrics
-
-### Cost Breakdown (per question)
-
-```
-┌────────────────────────────────┬──────────┬──────────┐
-│ Stage                          │ Cost     │ % Total  │
-├────────────────────────────────┼──────────┼──────────┤
-│ Question Embedding             │ $0.0002  │    2%    │
-│ RAG Retrieval                  │ $0.0001  │    1%    │
-│ Answer Generation (Claude)     │ $0.0450  │   56%    │
-│ Claims Extraction (GPT)        │ $0.0080  │   10%    │
-│ Claims Verification (RAG)      │ $0.0015  │    2%    │
-│ Accuracy Check (Claude)        │ $0.0180  │   22%    │
-│ Quality Rating (Dual)          │ $0.0070  │    9%    │
-├────────────────────────────────┼──────────┼──────────┤
-│ TOTAL (first iteration)        │ $0.0798  │  100%    │
-└────────────────────────────────┴──────────┴──────────┘
-```
-
-### Performance Metrics
-
-- **Average Response Time:** 4.2 seconds (first iteration)
-- **P95 Response Time:** 8.7 seconds
-- **Iteration Rate:** 12% of questions require refinement
-- **Success Rate:** 95% accuracy (validated by dual evaluators)
-
-### Quality Scores
-
-- **Average Quality Score:** 89/100
-- **OpenAI Average:** 87/100
-- **Anthropic Average:** 91/100
-- **Inter-rater Agreement:** 77% (within 10 points)
-
----
 
 ## Documentation
 
