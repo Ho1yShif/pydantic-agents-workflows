@@ -20,6 +20,7 @@ Two families of tasks live here, both thin wrappers over existing code:
 from __future__ import annotations
 
 import asyncio
+import functools
 import sys
 import time
 from pathlib import Path
@@ -39,6 +40,7 @@ from backend.ingestion import embed_documents, replace_source
 from backend.models import AnswerResponse, EvaluationResult, PipelineStageResult
 from backend.pipeline import (
     check_accuracy,
+    collapse_sources,
     embed_question,
     extract_claims,
     generate_answer,
@@ -64,6 +66,26 @@ app = Workflows(
     default_timeout=300,
     default_plan="standard",
 )
+
+
+def flush_on_exit(fn):
+    """Force-flush buffered Logfire spans before the task's instance terminates.
+
+    Every task — the orchestrator and each subtask — runs on its own short-lived
+    Workflows instance. Without an explicit flush, spans buffered by the OTLP
+    exporter can be lost when the instance exits, so `/sessions/{id}/logs` returns
+    an empty trace. Flushing in a `finally` (success or failure) ensures each
+    instance ships its spans for the shared distributed trace.
+    """
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await fn(*args, **kwargs)
+        finally:
+            logfire.force_flush()
+
+    return wrapper
 
 
 async def _ensure_ready(db: bool = False) -> None:
@@ -120,6 +142,7 @@ def _stage_result(
 # ---------------------------------------------------------------------------
 
 @app.task(timeout_seconds=120, retry=Retry(max_retries=3, wait_duration_ms=2000, backoff_scaling=2.0))
+@flush_on_exit
 async def generate_answer_task(question: str, documents_json: list[dict]) -> dict:
     """Subtask: answer generation (Claude). Most expensive + most rate-limit-prone."""
     await _ensure_ready()
@@ -128,6 +151,7 @@ async def generate_answer_task(question: str, documents_json: list[dict]) -> dic
 
 
 @app.task(timeout_seconds=60, retry=Retry(max_retries=2, wait_duration_ms=1000))
+@flush_on_exit
 async def extract_claims_task(answer: str) -> dict:
     """Subtask: claims extraction (OpenAI). Returns JSON-native claims + cost."""
     await _ensure_ready()
@@ -135,6 +159,7 @@ async def extract_claims_task(answer: str) -> dict:
 
 
 @app.task(timeout_seconds=90, retry=Retry(max_retries=2, wait_duration_ms=1000))
+@flush_on_exit
 async def verify_claims_task(claims: list[str]) -> dict:
     """Subtask: claims verification. Keeps its internal per-claim asyncio.gather
     (embedding lookups are ms-scale; per-claim fan-out would be slower/costlier)."""
@@ -144,10 +169,12 @@ async def verify_claims_task(claims: list[str]) -> dict:
         "verified_claims": claims_to_json(result["verified_claims"]),
         "verification_rate": result["verification_rate"],
         "cost_usd": result["cost_usd"],
+        "tokens_used": result["tokens_used"],
     }
 
 
 @app.task(timeout_seconds=90, retry=Retry(max_retries=2, wait_duration_ms=1000))
+@flush_on_exit
 async def check_accuracy_task(answer: str, claims_json: list[dict]) -> dict:
     """Subtask: technical-accuracy check (Claude)."""
     await _ensure_ready()
@@ -162,16 +189,22 @@ async def _rate_quality(rater, question: str, answer: str, doc_count: int) -> di
     await _ensure_ready()
     result = await rater(question, answer, doc_count)
     evaluation = build_evaluation_result(result["output"], result["model"])
-    return {"evaluation": evaluation.model_dump(mode="json"), "cost_usd": result["cost_usd"]}
+    return {
+        "evaluation": evaluation.model_dump(mode="json"),
+        "cost_usd": result["cost_usd"],
+        "tokens_used": result["input_tokens"] + result["output_tokens"],
+    }
 
 
 @app.task(timeout_seconds=60, retry=Retry(max_retries=2, wait_duration_ms=1000))
+@flush_on_exit
 async def rate_quality_openai_task(question: str, answer: str, doc_count: int) -> dict:
     """Subtask: OpenAI quality judge (runs on its own instance, parallel to Claude judge)."""
     return await _rate_quality(evaluate_with_openai, question, answer, doc_count)
 
 
 @app.task(timeout_seconds=60, retry=Retry(max_retries=2, wait_duration_ms=1000))
+@flush_on_exit
 async def rate_quality_anthropic_task(question: str, answer: str, doc_count: int) -> dict:
     """Subtask: Claude quality judge (runs on its own instance, parallel to OpenAI judge)."""
     return await _rate_quality(evaluate_with_anthropic, question, answer, doc_count)
@@ -182,6 +215,7 @@ async def rate_quality_anthropic_task(question: str, answer: str, doc_count: int
 # ---------------------------------------------------------------------------
 
 @app.task(timeout_seconds=600)
+@flush_on_exit
 async def run_qa_pipeline(
     question: str,
     session_id: str | None = None,
@@ -312,6 +346,7 @@ async def run_qa_pipeline(
         stages.append(_stage_result(
             "claims_verification",
             cost_usd=verification_result["cost_usd"],
+            tokens_used=verification_result["tokens_used"],
             model=settings.embedding_model,
             metadata={
                 "claims_verified": verified_count,
@@ -349,6 +384,7 @@ async def run_qa_pipeline(
         average_score = (openai_eval.score + anthropic_eval.score) / 2
         agreement = agreement_level(abs(openai_eval.score - anthropic_eval.score))
         eval_cost = openai_rate["cost_usd"] + anthropic_rate["cost_usd"]
+        eval_tokens = openai_rate["tokens_used"] + anthropic_rate["tokens_used"]
         stages.append(_stage_result(
             "technical_accuracy",
             duration_ms=parallel_duration,
@@ -366,6 +402,7 @@ async def run_qa_pipeline(
             "quality_evaluation",
             duration_ms=parallel_duration,
             cost_usd=eval_cost,
+            tokens_used=eval_tokens,
             model=f"{settings.eval_model_openai} + {settings.eval_model_anthropic}",
             metadata={
                 "quality_score": f"{average_score:.1f}",
@@ -386,7 +423,9 @@ async def run_qa_pipeline(
         response = AnswerResponse(
             question=question,
             answer=answer_text,
-            sources=documents,
+            # Generation above saw every chunk; the user-facing sources list collapses
+            # chunks of one page into a single entry (see collapse_sources).
+            sources=collapse_sources(documents),
             claims=verified_claims,
             quality_score=average_score,
             accuracy_score=accuracy_score,
@@ -453,6 +492,7 @@ async def _persist_session(response: AnswerResponse) -> str | None:
 # ---------------------------------------------------------------------------
 
 @app.task(timeout_seconds=1800)
+@flush_on_exit
 async def ingest_core() -> dict:
     """Core documentation ingest (additive sync). Establishes the base schema/rows.
 
@@ -467,6 +507,7 @@ async def ingest_core() -> dict:
 
 
 @app.task(retry=Retry(max_retries=2, wait_duration_ms=1000))
+@flush_on_exit
 async def ingest_source(name: str) -> dict:
     """Ingest one live source end-to-end: build → embed → replace-by-source.
 
@@ -482,6 +523,7 @@ async def ingest_source(name: str) -> dict:
 
 
 @app.task(timeout_seconds=3600)
+@flush_on_exit
 async def ingest_all() -> dict:
     """Run the full ingestion: core sync, then the live sources fanned out.
 
