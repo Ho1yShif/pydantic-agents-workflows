@@ -6,7 +6,6 @@ from .generation import generate_answer
 from .claims import extract_claims
 from .verification import verify_claims
 from .accuracy import check_accuracy
-from .evaluation import evaluate_quality
 
 __all__ = [
     "embed_question",
@@ -16,6 +15,5 @@ __all__ = [
     "extract_claims",
     "verify_claims",
     "check_accuracy",
-    "evaluate_quality",
 ]
 

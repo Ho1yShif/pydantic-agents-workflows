@@ -89,10 +89,10 @@ Decide whether the passages substantiate the claim."""
     output_tokens = usage.response_tokens or 0
 
     # Map the cited passage indices back to their sources (guard against out-of-range).
+    # If the judge supports the claim but names no passage, we leave the citation list
+    # empty rather than fabricating one from the top retrieved doc — an honest
+    # "verified, no specific source cited" beats a possibly-wrong attribution.
     cited = [docs[i - 1].source for i in verdict.supporting_doc_indices if 1 <= i <= len(docs)]
-    # Fall back to the top retrieved source when the judge supports but cites nothing.
-    if verdict.supported and not cited:
-        cited = [docs[0].source]
 
     verification_score = verdict.confidence if verdict.supported else 0.0
 

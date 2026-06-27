@@ -104,22 +104,12 @@ def _stage_result(
     stage: str,
     *,
     cost_usd: float,
-    iteration: int | None = None,
     duration_ms: float = 0.0,
     tokens_used: int | None = None,
     model: str | None = None,
     metadata: dict | None = None,
 ) -> PipelineStageResult:
-    """Build a successful ``PipelineStageResult`` for the observability trail.
-
-    When ``iteration`` is given, it is appended to the stage name as
-    ``_iter_{n}`` and folded into ``metadata`` — so the stage-naming convention
-    lives here and each call site stays a single line.
-    """
-    meta = dict(metadata or {})
-    if iteration is not None:
-        stage = f"{stage}_iter_{iteration}"
-        meta["iteration"] = iteration
+    """Build a successful ``PipelineStageResult`` for the observability trail."""
     return PipelineStageResult(
         stage=stage,
         success=True,
@@ -127,7 +117,7 @@ def _stage_result(
         cost_usd=cost_usd,
         tokens_used=tokens_used,
         model=model,
-        metadata=meta,
+        metadata=dict(metadata or {}),
     )
 
 

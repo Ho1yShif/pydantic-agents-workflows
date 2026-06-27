@@ -1,7 +1,7 @@
 # Makefile for Ask Render Anything Assistant
 # Simplifies common development tasks
 
-.PHONY: help install dev-setup db-start db-stop db-reset ingest crawl-tutorials embed-tutorials add-pricing add-ai-agent add-autoscaling add-nodejs add-tutorials-index run-backend run-frontend test clean
+.PHONY: help install dev-setup db-start db-stop db-reset ingest crawl-tutorials embed-tutorials add-pricing add-ai-agent add-autoscaling add-nodejs add-tutorials-index run-backend run-frontend clean
 
 help:
 	@echo "Ask Render Anything Assistant - Development Commands"
@@ -25,7 +25,6 @@ help:
 	@echo "Development:"
 	@echo "  make run-backend   - Run backend API (port 8000)"
 	@echo "  make run-frontend  - Run frontend dev server (port 3000)"
-	@echo "  make test          - Run tests"
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  make clean         - Clean up build artifacts"
@@ -146,10 +145,6 @@ run-frontend:
 	@echo ""
 	cd frontend && npm run dev
 
-test:
-	@echo "🧪 Running tests..."
-	uv run pytest backend/tests/ -v
-
 clean:
 	@echo "🧹 Cleaning up..."
 	rm -rf .venv
@@ -158,7 +153,6 @@ clean:
 	rm -rf frontend/out
 	rm -rf backend/__pycache__
 	rm -rf backend/**/__pycache__
-	rm -rf .pytest_cache
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete
 	@echo "✅ Cleanup complete"

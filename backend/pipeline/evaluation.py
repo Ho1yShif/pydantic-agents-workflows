@@ -5,19 +5,14 @@ actionability for the developer who asked. Two independent judges (OpenAI + Anth
 score in parallel and their agreement is a confidence signal. Factual grounding is
 checked separately by the Accuracy stage, so this stage does not re-verify each fact."""
 
-from typing import List
-import asyncio
-
-from backend.config import settings, PipelineConfig
-from backend.models import Document, EvaluationResult, EvaluationOutput
+from backend.config import settings
+from backend.models import EvaluationResult, EvaluationOutput
 from backend.observability import (
-    instrument_stage,
     calculate_openai_cost,
     calculate_anthropic_cost,
     usage_and_cost,
 )
 from backend.pipeline._agents import anthropic_agent, openai_agent
-import logfire
 
 
 EVALUATION_INSTRUCTIONS = """You are a quality evaluator for technical documentation answers.
@@ -127,60 +122,3 @@ def build_evaluation_result(output: EvaluationOutput, model: str) -> EvaluationR
         developer_value=output.developer_value,
         feedback=output.feedback,
     )
-
-
-@instrument_stage(PipelineConfig.STAGE_EVALUATION)
-async def evaluate_quality(
-    question: str,
-    answer: str,
-    documents: List[Document]
-) -> dict:
-    """
-    Independent quality assessment from two models.
-
-    Args:
-        question: The user's question
-        answer: The generated answer
-        documents: Source documents
-
-    Returns:
-        dict with 'evaluations', 'average_score', 'agreement_level', 'total_cost_usd'
-    """
-
-    logfire.info("Evaluating quality with dual models")
-
-    doc_count = len(documents)
-
-    # Run both evaluations in parallel
-    openai_result, anthropic_result = await asyncio.gather(
-        evaluate_with_openai(question, answer, doc_count),
-        evaluate_with_anthropic(question, answer, doc_count),
-    )
-
-    openai_eval = build_evaluation_result(openai_result["output"], openai_result["model"])
-    anthropic_eval = build_evaluation_result(anthropic_result["output"], anthropic_result["model"])
-
-    evaluations = [openai_eval, anthropic_eval]
-
-    average_score = (openai_eval.score + anthropic_eval.score) / 2
-    score_difference = abs(openai_eval.score - anthropic_eval.score)
-    agreement = agreement_level(score_difference)
-
-    total_cost = openai_result["cost_usd"] + anthropic_result["cost_usd"]
-
-    logfire.info(
-        "Quality evaluated",
-        openai_score=openai_eval.score,
-        anthropic_score=anthropic_eval.score,
-        average_score=average_score,
-        agreement_level=agreement,
-        score_difference=score_difference,
-        cost_usd=total_cost,
-    )
-
-    return {
-        "evaluations": evaluations,
-        "average_score": average_score,
-        "agreement_level": agreement,
-        "cost_usd": total_cost,
-    }
