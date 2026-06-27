@@ -22,9 +22,10 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
  * Ask a question via the Workflows-backed pipeline.
  *
  * The gateway triggers a Render Workflow run and we poll it for the result.
- * Token-by-token streaming is no longer available (the pipeline runs
- * out-of-band in the Workflow service), so `onAnswerToken` is unused and
- * `onProgress` receives coarse status updates while the run is in flight.
+ * The pipeline runs out-of-band in the Workflow service, so token-by-token
+ * answer streaming is unavailable (`onAnswerToken` is unused). The orchestrator
+ * records real per-stage progress under a token, which we poll alongside the
+ * run status and replay through `onProgress` as each new stage lands.
  */
 export async function askQuestion(
   question: string,
@@ -44,22 +45,27 @@ export async function askQuestion(
     throw new Error(`API error: ${startResponse.statusText}`)
   }
 
-  const { run_id: runId } = (await startResponse.json()) as { run_id: string }
+  const { run_id: runId, progress_token: progressToken } = (await startResponse.json()) as {
+    run_id: string
+    progress_token?: string
+  }
 
-  onProgress?.({
-    stage: 'pipeline',
-    status: 'started',
-    message: 'Running the answer pipeline…',
-    progress: 10,
-    cost_so_far: 0,
-  })
+  const progressQuery = progressToken ? `?progress_token=${encodeURIComponent(progressToken)}` : ''
 
-  // 2. Poll for completion.
-  let polls = 0
+  // 2. Poll for completion. The server returns the cumulative list of stage
+  //    updates each time; replay only the ones we haven't surfaced yet.
+  let seen = 0
+  const replayNew = (updates?: ProgressUpdate[]) => {
+    if (!updates || !onProgress) return
+    for (; seen < updates.length; seen++) {
+      onProgress(updates[seen])
+    }
+  }
+
   while (true) {
     await delay(POLL_INTERVAL_MS, signal)
 
-    const pollResponse = await fetch(`${API_BASE_URL}/ask/${runId}`, { signal })
+    const pollResponse = await fetch(`${API_BASE_URL}/ask/${runId}${progressQuery}`, { signal })
     if (!pollResponse.ok) {
       throw new Error(`API error: ${pollResponse.statusText}`)
     }
@@ -68,32 +74,18 @@ export async function askQuestion(
       status: 'running' | 'done' | 'failed'
       result?: AnswerResponse
       error?: string
+      updates?: ProgressUpdate[]
     }
 
+    replayNew(data.updates)
+
     if (data.status === 'done' && data.result) {
-      onProgress?.({
-        stage: 'pipeline',
-        status: 'completed',
-        message: 'Answer ready',
-        progress: 100,
-        cost_so_far: data.result.total_cost ?? 0,
-      })
       return data.result
     }
 
     if (data.status === 'failed') {
       throw new Error(data.error || 'Pipeline run failed')
     }
-
-    // Still running — nudge the progress bar toward (but never reaching) 90%.
-    polls += 1
-    onProgress?.({
-      stage: 'pipeline',
-      status: 'started',
-      message: 'Running the answer pipeline…',
-      progress: Math.min(10 + polls * 8, 90),
-      cost_so_far: 0,
-    })
   }
 }
 

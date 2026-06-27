@@ -38,6 +38,9 @@ export default function ProgressTracker({ progress, loading }: ProgressTrackerPr
               <span className="text-sm text-zinc-300 truncate">
                 {formatStageName(latestUpdate.stage)}
               </span>
+              <span className="text-xs text-zinc-500 hidden sm:block truncate">
+                {latestUpdate.message}
+              </span>
             </>
           )}
           {!latestUpdate && loading && (
@@ -69,11 +72,6 @@ export default function ProgressTracker({ progress, loading }: ProgressTrackerPr
           style={{ width: `${currentProgress}%`, background: 'linear-gradient(90deg, #8b5cf6, #00fff0)' }}
         />
       </div>
-
-      {/* Status feedback — sits under the loading bar */}
-      {latestUpdate?.message && (
-        <p className="text-xs text-zinc-500 truncate">{latestUpdate.message}</p>
-      )}
 
       {/* Stage History */}
       {progress.length > 0 && (
