@@ -102,8 +102,7 @@ with logfire.span(
     logfire.info(
         "Session completed",
         total_cost_usd=result.cost,
-        quality_score=result.quality_score,
-        iterations=result.iterations
+        quality_score=result.quality_score
     )
 ```
 
@@ -124,12 +123,6 @@ logfire.metric("pipeline.quality_score", value=score)
 logfire.metric("pipeline.quality_score.by_category",
     value=score,
     category=question_category
-)
-
-# Track iteration patterns
-logfire.metric("pipeline.iterations", value=iterations)
-logfire.metric("pipeline.first_pass_rate",
-    value=1 if iterations == 1 else 0
 )
 ```
 
@@ -168,8 +161,6 @@ logfire.info(
     total_cost_usd=total_cost,
     duration_ms=duration,
     quality_score=quality_score,
-    iterations=iterations,
-    passed_first_iteration=iterations == 1,
     session_id=session_id,
     stage_costs={
         "embedding": embedding_cost,
@@ -190,7 +181,7 @@ Track these attributes consistently across your pipeline:
 - **Timing:** `duration_ms`, `start_time`, `end_time`
 - **Costs:** `cost_usd`, `total_cost_usd`, `cost_by_stage`
 - **Quality:** `quality_score`, `accuracy_score`, `agreement_level`
-- **Metadata:** `model_name`, `token_count`, `iteration_number`
+- **Metadata:** `model_name`, `token_count`
 
 ---
 
@@ -215,8 +206,7 @@ user_session.qa_request                    [4.2s, $0.08]
 │   ├── claims_verification                [0.5s, $0.0015]
 │   ├── technical_accuracy                 [0.6s, $0.018]
 │   │   └── anthropic.messages.create     [0.58s, $0.018]
-│   ├── quality_evaluation                 [0.3s, $0.007]
-│   └── quality_gate                       [0.01s, $0]
+│   └── quality_evaluation                 [0.3s, $0.007]
 ```
 
 ### What This Shows
@@ -238,8 +228,7 @@ Logfire stores all telemetry in a queryable database. Use SQL to analyze pattern
 SELECT 
     session_id, 
     question_length, 
-    total_cost_usd, 
-    iterations
+    total_cost_usd
 FROM logs
 WHERE total_cost_usd > 0.10
 ORDER BY total_cost_usd DESC
@@ -259,20 +248,6 @@ GROUP BY DATE(timestamp)
 HAVING AVG(quality_score) < 85;
 ```
 
-### Analyze Iteration Patterns
-
-```sql
-SELECT 
-    iterations,
-    COUNT(*) as request_count,
-    AVG(quality_score) as avg_quality,
-    AVG(total_cost_usd) as avg_cost
-FROM logs
-WHERE event_type = 'Pipeline execution completed'
-GROUP BY iterations
-ORDER BY iterations;
-```
-
 ### Track Cost Efficiency
 
 ```sql
@@ -280,8 +255,7 @@ SELECT
     DATE(timestamp) as date,
     COUNT(*) as total_requests,
     SUM(total_cost_usd) as total_cost,
-    AVG(total_cost_usd) as avg_cost_per_request,
-    SUM(CASE WHEN iterations = 1 THEN 1 ELSE 0 END)::FLOAT / COUNT(*) * 100 as first_pass_rate
+    AVG(total_cost_usd) as avg_cost_per_request
 FROM logs
 WHERE event_type = 'Pipeline execution completed'
 GROUP BY DATE(timestamp)
@@ -315,7 +289,6 @@ Create custom dashboards to visualize key metrics.
 - Average response time
 - Cost per request
 - Success/failure rates
-- Current iteration distribution
 
 **SQL Query:**
 
@@ -361,7 +334,6 @@ ORDER BY total_cost DESC;
 **What it shows:**
 - Quality score distribution
 - Evaluator agreement rates
-- Iteration patterns
 - Question type performance
 - Failure analysis
 
@@ -372,12 +344,11 @@ SELECT
   question_category,
   COUNT(*) as questions,
   AVG(quality_score) as avg_score,
-  AVG(openai_score - anthropic_score) as avg_disagreement,
-  SUM(CASE WHEN iterations > 1 THEN 1 ELSE 0 END)::FLOAT / COUNT(*) * 100 as iteration_rate
+  AVG(openai_score - anthropic_score) as avg_disagreement
 FROM pipeline_executions
 WHERE timestamp > NOW() - INTERVAL '7 days'
 GROUP BY question_category
-ORDER BY iteration_rate DESC;
+ORDER BY avg_score DESC;
 ```
 
 ---
@@ -423,27 +394,7 @@ WHERE
 HAVING low_quality_pct > 10;
 ```
 
-### 3. High Iteration Rate Alert
-
-**Trigger:** Iteration rate > 25%
-
-**Action:** Check RAG document quality
-
-**SQL Query:**
-
-```sql
-SELECT 
-    COUNT(*) as total_requests,
-    SUM(CASE WHEN iterations > 1 THEN 1 ELSE 0 END) as multi_iteration_requests,
-    SUM(CASE WHEN iterations > 1 THEN 1 ELSE 0 END)::FLOAT / COUNT(*) * 100 as iteration_rate
-FROM logs
-WHERE 
-    event_type = 'Pipeline execution completed'
-    AND timestamp > NOW() - INTERVAL '1 hour'
-HAVING iteration_rate > 25;
-```
-
-### 4. Slow Response Alert
+### 3. Slow Response Alert
 
 **Trigger:** P95 latency > 10 seconds
 

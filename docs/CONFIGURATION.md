@@ -8,7 +8,6 @@ Complete reference for all configuration options in the Ask Render Anything Assi
 - [Pipeline Configuration](#pipeline-configuration)
 - [Model Selection](#model-selection)
 - [RAG Configuration](#rag-configuration)
-- [Quality Thresholds](#quality-thresholds)
 - [Performance Tuning](#performance-tuning)
 
 ---
@@ -38,10 +37,7 @@ DATABASE_URL=postgresql://user:password@host:5432/dbname
 These have sensible defaults but can be customized:
 
 ```bash
-# Quality and Iteration Settings
-QUALITY_THRESHOLD=85                     # Minimum quality score (0-100)
-ACCURACY_THRESHOLD=90                    # Minimum accuracy score (0-100)
-MAX_ITERATIONS=3                         # Max refinement attempts
+# Generation Settings
 MAX_TOKENS=2000                          # Answer generation token limit
 
 # RAG Settings
@@ -79,13 +75,7 @@ Edit `backend/config.py` to customize pipeline behavior:
 
 ```python
 class PipelineConfig:
-    # Quality thresholds
-    QUALITY_THRESHOLD = 85           # Minimum acceptable quality score
-    ACCURACY_THRESHOLD = 90          # Minimum technical accuracy
-    AGREEMENT_THRESHOLD = 10         # Max score difference between evaluators
-    
     # Performance tuning
-    MAX_ITERATIONS = 3               # Maximum refinement attempts
     MAX_TOKENS = 2000                # Output token limit for generation
     TIMEOUT_SECONDS = 30             # Per-stage timeout in seconds
     
@@ -216,42 +206,6 @@ MIN_CHUNK_SIZE = 100  # Discard very small chunks
 
 ---
 
-## Quality Thresholds
-
-### Score Thresholds
-
-```python
-# Minimum quality score to accept answer (0-100)
-QUALITY_THRESHOLD = 85  
-# Lower = fewer iterations, faster responses, lower quality
-# Higher = more iterations, slower responses, higher quality
-
-# Minimum accuracy score (0-100)
-ACCURACY_THRESHOLD = 90
-# How technically accurate must the answer be?
-
-# Maximum score difference between evaluators (0-100)
-AGREEMENT_THRESHOLD = 10
-# If evaluators disagree by more than this, trigger refinement
-```
-
-### Iteration Control
-
-```python
-# Maximum number of refinement iterations
-MAX_ITERATIONS = 3
-# Higher = better quality, higher cost
-# Lower = faster responses, lower cost
-
-# Minimum improvement required to continue iterating
-MIN_IMPROVEMENT = 5  # Score must improve by at least 5 points
-
-# Early stopping if score is very high
-EXCELLENT_THRESHOLD = 95  # Stop iterating if score exceeds this
-```
-
----
-
 ## Performance Tuning
 
 ### Latency Optimization
@@ -282,12 +236,6 @@ ACCURACY_MODEL = "gpt-5.4-mini"
 # Reduce token limits
 MAX_TOKENS = 1000
 
-# Lower quality threshold (fewer iterations)
-QUALITY_THRESHOLD = 75
-
-# Limit iterations
-MAX_ITERATIONS = 1
-
 # Enable aggressive caching
 ENABLE_CACHING = True
 CACHE_TTL_SECONDS = 3600  # 1 hour
@@ -303,12 +251,6 @@ ACCURACY_MODEL = "claude-sonnet-4-6"
 
 # Increase token limits
 MAX_TOKENS = 3000
-
-# Higher quality threshold
-QUALITY_THRESHOLD = 90
-
-# More iterations allowed
-MAX_ITERATIONS = 5
 
 # More RAG context
 RAG_TOP_K = 15
@@ -329,12 +271,9 @@ TIMEOUT_SECONDS = 60
 MAX_TOKENS = 1500
 ```
 
-**High iteration rate:**
+**Poor retrieval quality:**
 ```python
-# Lower quality threshold
-QUALITY_THRESHOLD = 75
-
-# Or improve RAG retrieval
+# Improve RAG retrieval
 RAG_TOP_K = 15
 SIMILARITY_THRESHOLD = 0.70
 ```
@@ -344,10 +283,6 @@ SIMILARITY_THRESHOLD = 0.70
 # Use cheaper models
 ANSWER_MODEL = "claude-haiku-4-5"
 CLAIMS_MODEL = "gpt-3.5-turbo"
-
-# Reduce iterations
-MAX_ITERATIONS = 1
-QUALITY_THRESHOLD = 75
 
 # Reduce token limit
 MAX_TOKENS = 1000
@@ -363,9 +298,6 @@ RAG_TOP_K = 15
 
 # More output tokens
 MAX_TOKENS = 2500
-
-# More iterations
-MAX_ITERATIONS = 5
 ```
 
 ---

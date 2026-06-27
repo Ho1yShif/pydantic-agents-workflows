@@ -107,7 +107,6 @@ export interface HistorySession {
   claims: any[]
   evaluations: any[]
   quality_score: number
-  iterations: number
   total_cost: number
   total_duration_ms: number
   created_at: string

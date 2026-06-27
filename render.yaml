@@ -23,14 +23,6 @@ envVarGroups:
       - key: LOGFIRE_READ_TOKEN
         sync: false
       # Pipeline configuration
-      - key: QUALITY_THRESHOLD
-        value: "85"
-      - key: ACCURACY_THRESHOLD
-        value: "70"
-      - key: AGREEMENT_THRESHOLD
-        value: "10"
-      - key: MAX_ITERATIONS
-        value: "1"
       - key: MAX_TOKENS
         value: "2000"
       - key: TIMEOUT_SECONDS

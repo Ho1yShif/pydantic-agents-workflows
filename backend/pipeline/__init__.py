@@ -7,7 +7,6 @@ from .claims import extract_claims
 from .verification import verify_claims
 from .accuracy import check_accuracy
 from .evaluation import evaluate_quality
-from .quality_gate import quality_gate_decision
 
 __all__ = [
     "embed_question",
@@ -17,6 +16,5 @@ __all__ = [
     "verify_claims",
     "check_accuracy",
     "evaluate_quality",
-    "quality_gate_decision",
 ]
 

@@ -42,7 +42,6 @@ from backend.pipeline import (
     embed_question,
     extract_claims,
     generate_answer,
-    quality_gate_decision,
     retrieve_documents,
     verify_claims,
 )
@@ -121,11 +120,11 @@ def _stage_result(
 # ---------------------------------------------------------------------------
 
 @app.task(timeout_seconds=120, retry=Retry(max_retries=3, wait_duration_ms=2000, backoff_scaling=2.0))
-async def generate_answer_task(question: str, documents_json: list[dict], feedback: str | None = None) -> dict:
+async def generate_answer_task(question: str, documents_json: list[dict]) -> dict:
     """Subtask: answer generation (Claude). Most expensive + most rate-limit-prone."""
     await _ensure_ready()
     documents = documents_from_json(documents_json)
-    return await generate_answer(question, documents, feedback)
+    return await generate_answer(question, documents)
 
 
 @app.task(timeout_seconds=60, retry=Retry(max_retries=2, wait_duration_ms=1000))
@@ -202,8 +201,7 @@ async def run_qa_pipeline(
                     three parallel subtasks; Quality's two judges also give a
                     cross-provider agreement signal.
 
-    A quality gate (in-process) decides whether to return or refine with feedback,
-    looping up to ``settings.max_iterations`` times. Returns the ``AnswerResponse``
+    The pipeline runs as a single linear pass and returns the ``AnswerResponse``
     as a JSON-serializable dict.
     """
     await _ensure_ready(db=True)
@@ -271,193 +269,117 @@ async def run_qa_pipeline(
             f"Found {len(documents)} relevant documents", 25, total_cost,
         )
 
-        # Iterative quality refinement loop. Each iteration gets an equal share of
-        # the 25%–85% progress band (mirrors the original streamed pipeline).
-        iter_span = 60 / settings.max_iterations
-        current_iteration = 1
-        feedback = None
-        answer_text = ""
-        verified_claims = []
-        accuracy_score = 0
-        evaluations = []
-        average_score = 0.0
+        # Single linear pass: generate, ground (claims → verify), then review
+        # accuracy + quality. Progress advances across a fixed 28%–95% band.
 
-        iterations_run = 0
-        while current_iteration <= settings.max_iterations:
-            logfire.info(f"Starting iteration {current_iteration}")
-            iterations_run = current_iteration  # the iteration actually executing
-            p = 25 + (current_iteration - 1) * iter_span  # progress baseline for this iteration
+        # --- Generate phase: the expensive Claude call as a retried subtask ---
+        await emit("generation", "started", "Generating answer...", 28, total_cost)
+        gen_result = await generate_answer_task(question, documents_to_json(documents))
+        stages.append(_stage_result(
+            "answer_generation",
+            cost_usd=gen_result["cost_usd"],
+            tokens_used=gen_result["input_tokens"] + gen_result["output_tokens"],
+            model=settings.answer_model,
+            metadata={"answer_length": len(gen_result["answer"])},
+        ))
+        total_cost += gen_result["cost_usd"]
+        answer_text = gen_result["answer"]
+        await emit("generation", "completed", "Answer generated", 37, total_cost)
 
-            # --- Generate phase: the expensive Claude call as a retried subtask ---
-            await emit(
-                f"generation_iter_{current_iteration}", "started",
-                f"Generating answer (iteration {current_iteration})...",
-                min(p + 0.05 * iter_span, 95), total_cost,
-            )
-            gen_result = await generate_answer_task(question, documents_to_json(documents), feedback)
-            stages.append(_stage_result(
-                "answer_generation",
-                iteration=current_iteration,
-                cost_usd=gen_result["cost_usd"],
-                tokens_used=gen_result["input_tokens"] + gen_result["output_tokens"],
-                model=settings.answer_model,
-                metadata={"answer_length": len(gen_result["answer"])},
-            ))
-            total_cost += gen_result["cost_usd"]
-            answer_text = gen_result["answer"]
-            await emit(
-                f"generation_iter_{current_iteration}", "completed", "Answer generated",
-                min(p + 0.20 * iter_span, 95), total_cost,
-            )
+        # --- Grounding phase: extract claims, then verify them against sources ---
+        # Claims extraction (own retried task)
+        await emit("claims", "started", "Extracting factual claims...", 43, total_cost)
+        claims_result = await extract_claims_task(answer_text)
+        stages.append(_stage_result(
+            "claims_extraction",
+            cost_usd=claims_result["cost_usd"],
+            tokens_used=claims_result["input_tokens"] + claims_result["output_tokens"],
+            model=settings.claims_model,
+            metadata={"claims_extracted": len(claims_result["claims"])},
+        ))
+        total_cost += claims_result["cost_usd"]
+        await emit(
+            "claims", "completed",
+            f"Extracted {len(claims_result['claims'])} claims", 49, total_cost,
+        )
 
-            # --- Grounding phase: extract claims, then verify them against sources ---
-            # Claims extraction (own retried task)
-            await emit(
-                f"claims_iter_{current_iteration}", "started", "Extracting factual claims...",
-                min(p + 0.30 * iter_span, 95), total_cost,
-            )
-            claims_result = await extract_claims_task(answer_text)
-            stages.append(_stage_result(
-                "claims_extraction",
-                iteration=current_iteration,
-                cost_usd=claims_result["cost_usd"],
-                tokens_used=claims_result["input_tokens"] + claims_result["output_tokens"],
-                model=settings.claims_model,
-                metadata={"claims_extracted": len(claims_result["claims"])},
-            ))
-            total_cost += claims_result["cost_usd"]
-            await emit(
-                f"claims_iter_{current_iteration}", "completed",
-                f"Extracted {len(claims_result['claims'])} claims",
-                min(p + 0.40 * iter_span, 95), total_cost,
-            )
+        # Claims verification (own task; per-claim gather stays in-process inside it)
+        await emit("verification", "started", "Verifying claims...", 55, total_cost)
+        verification_result = await verify_claims_task(claims_result["claims"])
+        verified_claims = claims_from_json(verification_result["verified_claims"])
+        verification_rate = verification_result["verification_rate"] * 100
+        verified_count = len([c for c in verified_claims if c.verified])
+        stages.append(_stage_result(
+            "claims_verification",
+            cost_usd=verification_result["cost_usd"],
+            model=settings.embedding_model,
+            metadata={
+                "claims_verified": verified_count,
+                "total_claims": len(verified_claims),
+                "verification_rate": f"{verification_rate:.0f}%",
+            },
+        ))
+        total_cost += verification_result["cost_usd"]
+        await emit(
+            "verification", "completed",
+            f"{verification_rate:.0f}% claims verified", 61, total_cost,
+        )
 
-            # Claims verification (own task; per-claim gather stays in-process inside it)
-            await emit(
-                f"verification_iter_{current_iteration}", "started", "Verifying claims...",
-                min(p + 0.50 * iter_span, 95), total_cost,
-            )
-            verification_result = await verify_claims_task(claims_result["claims"])
-            verified_claims = claims_from_json(verification_result["verified_claims"])
-            verification_rate = verification_result["verification_rate"] * 100
-            verified_count = len([c for c in verified_claims if c.verified])
-            stages.append(_stage_result(
-                "claims_verification",
-                iteration=current_iteration,
-                cost_usd=verification_result["cost_usd"],
-                model=settings.embedding_model,
-                metadata={
-                    "claims_verified": verified_count,
-                    "total_claims": len(verified_claims),
-                    "verification_rate": f"{verification_rate:.0f}%",
-                },
-            ))
-            total_cost += verification_result["cost_usd"]
-            await emit(
-                f"verification_iter_{current_iteration}", "completed",
-                f"{verification_rate:.0f}% claims verified",
-                min(p + 0.60 * iter_span, 95), total_cost,
-            )
+        # --- Accuracy + Quality phase: fan out to three parallel subtasks ---
+        # Accuracy (factual-grounding review) and the two Quality judges
+        # (developer-experience rating) have no mutual dependency, so they run on
+        # three parallel instances. The average score and inter-judge agreement
+        # are combined here (the judges already ran through build_evaluation_result).
+        await emit(
+            "accuracy", "started",
+            "Checking accuracy & quality in parallel...", 67, total_cost,
+        )
+        stage_start = time.time()
+        accuracy_result, openai_rate, anthropic_rate = await asyncio.gather(
+            check_accuracy_task(answer_text, claims_to_json(verified_claims)),
+            rate_quality_openai_task(question, answer_text, len(documents)),
+            rate_quality_anthropic_task(question, answer_text, len(documents)),
+        )
+        parallel_duration = (time.time() - stage_start) * 1000
 
-            # --- Accuracy + Quality phase: fan out to three parallel subtasks ---
-            # Accuracy (factual-grounding review) and the two Quality judges
-            # (developer-experience rating) have no mutual dependency, so they run on
-            # three parallel instances. The average score and inter-judge agreement
-            # are combined here (the judges already ran through build_evaluation_result).
-            await emit(
-                f"accuracy_iter_{current_iteration}", "started",
-                "Checking accuracy & quality in parallel...",
-                min(p + 0.70 * iter_span, 95), total_cost,
-            )
-            stage_start = time.time()
-            accuracy_result, openai_rate, anthropic_rate = await asyncio.gather(
-                check_accuracy_task(answer_text, claims_to_json(verified_claims)),
-                rate_quality_openai_task(question, answer_text, len(documents)),
-                rate_quality_anthropic_task(question, answer_text, len(documents)),
-            )
-            parallel_duration = (time.time() - stage_start) * 1000
-
-            accuracy_score = accuracy_result["accuracy_score"]
-            openai_eval = EvaluationResult.model_validate(openai_rate["evaluation"])
-            anthropic_eval = EvaluationResult.model_validate(anthropic_rate["evaluation"])
-            evaluations = [openai_eval, anthropic_eval]
-            average_score = (openai_eval.score + anthropic_eval.score) / 2
-            agreement = agreement_level(abs(openai_eval.score - anthropic_eval.score))
-            eval_cost = openai_rate["cost_usd"] + anthropic_rate["cost_usd"]
-            stages.append(_stage_result(
-                "technical_accuracy",
-                iteration=current_iteration,
-                duration_ms=parallel_duration,
-                cost_usd=accuracy_result["cost_usd"],
-                tokens_used=accuracy_result["input_tokens"] + accuracy_result["output_tokens"],
-                model=settings.accuracy_model,
-                metadata={"accuracy_score": accuracy_score},
-            ))
-            total_cost += accuracy_result["cost_usd"]
-            await emit(
-                f"accuracy_iter_{current_iteration}", "completed",
-                f"Accuracy score: {accuracy_score}/100",
-                min(p + 0.80 * iter_span, 95), total_cost,
-            )
-            stages.append(_stage_result(
-                "quality_evaluation",
-                iteration=current_iteration,
-                duration_ms=parallel_duration,
-                cost_usd=eval_cost,
-                model=f"{settings.eval_model_openai} + {settings.eval_model_anthropic}",
-                metadata={
-                    "quality_score": f"{average_score:.1f}",
-                    "openai_score": openai_eval.score,
-                    "claude_score": anthropic_eval.score,
-                    "agreement": agreement,
-                },
-            ))
-            total_cost += eval_cost
-            await emit(
-                f"evaluation_iter_{current_iteration}", "completed",
-                f"Quality score: {average_score:.1f}/100",
-                min(p + 0.90 * iter_span, 95), total_cost,
-            )
-
-            # --- Quality gate (in-process): return, or refine with feedback ---
-            await emit(
-                f"quality_gate_iter_{current_iteration}", "started", "Checking quality gate...",
-                min(p + 0.95 * iter_span, 95), total_cost,
-            )
-            gate_result = await quality_gate_decision(
-                average_score=average_score,
-                evaluations=evaluations,
-                accuracy_score=accuracy_score,
-                current_iteration=current_iteration,
-                errors=accuracy_result["errors"],
-                corrections=accuracy_result["corrections"],
-            )
-            stages.append(_stage_result(
-                "quality_gate",
-                iteration=current_iteration,
-                cost_usd=0.0,
-                metadata={
-                    "should_iterate": gate_result["should_iterate"],
-                    "reason": gate_result["reason"],
-                },
-            ))
-
-            if not gate_result["should_iterate"]:
-                logfire.info(f"Quality gate passed: {gate_result['reason']}")
-                await emit(
-                    f"quality_gate_iter_{current_iteration}", "completed",
-                    "Quality gate passed!", 95, total_cost,
-                )
-                break
-
-            logfire.info(f"Quality gate requires iteration: {gate_result['reason']}")
-            await emit(
-                f"quality_gate_iter_{current_iteration}", "completed",
-                f"Refining answer... ({gate_result['reason']})",
-                min(p + iter_span, 85), total_cost,
-            )
-            feedback = gate_result["feedback"]
-            current_iteration += 1
+        accuracy_score = accuracy_result["accuracy_score"]
+        openai_eval = EvaluationResult.model_validate(openai_rate["evaluation"])
+        anthropic_eval = EvaluationResult.model_validate(anthropic_rate["evaluation"])
+        evaluations = [openai_eval, anthropic_eval]
+        average_score = (openai_eval.score + anthropic_eval.score) / 2
+        agreement = agreement_level(abs(openai_eval.score - anthropic_eval.score))
+        eval_cost = openai_rate["cost_usd"] + anthropic_rate["cost_usd"]
+        stages.append(_stage_result(
+            "technical_accuracy",
+            duration_ms=parallel_duration,
+            cost_usd=accuracy_result["cost_usd"],
+            tokens_used=accuracy_result["input_tokens"] + accuracy_result["output_tokens"],
+            model=settings.accuracy_model,
+            metadata={"accuracy_score": accuracy_score},
+        ))
+        total_cost += accuracy_result["cost_usd"]
+        await emit(
+            "accuracy", "completed",
+            f"Accuracy score: {accuracy_score}/100", 79, total_cost,
+        )
+        stages.append(_stage_result(
+            "quality_evaluation",
+            duration_ms=parallel_duration,
+            cost_usd=eval_cost,
+            model=f"{settings.eval_model_openai} + {settings.eval_model_anthropic}",
+            metadata={
+                "quality_score": f"{average_score:.1f}",
+                "openai_score": openai_eval.score,
+                "claude_score": anthropic_eval.score,
+                "agreement": agreement,
+            },
+        ))
+        total_cost += eval_cost
+        await emit(
+            "evaluation", "completed",
+            f"Quality score: {average_score:.1f}/100", 90, total_cost,
+        )
+        await emit("finalize", "completed", "Answer ready", 95, total_cost)
 
         total_duration_ms = (time.time() - pipeline_start) * 1000
 
@@ -469,7 +391,6 @@ async def run_qa_pipeline(
             quality_score=average_score,
             accuracy_score=accuracy_score,
             evaluations=evaluations,
-            iterations=iterations_run,
             total_cost=total_cost,
             total_duration_ms=total_duration_ms,
             stages=stages,
@@ -486,7 +407,6 @@ async def run_qa_pipeline(
             total_duration_ms=total_duration_ms,
             quality_score=average_score,
             accuracy_score=accuracy_score,
-            iterations=iterations_run,
             session_id=response.session_id,
         )
 
@@ -509,7 +429,6 @@ async def _persist_session(response: AnswerResponse) -> str | None:
             claims=[c.model_dump() for c in response.claims],
             evaluations=[e.model_dump() for e in response.evaluations],
             quality_score=response.quality_score,
-            iterations=response.iterations,
             total_cost=response.total_cost,
             total_duration_ms=response.total_duration_ms,
             trace_id=trace_id,

@@ -1,16 +1,14 @@
-# The 8-Stage AI Pipeline
+# The 7-Stage AI Pipeline
 
 This document provides a detailed breakdown of each stage in the Q&A pipeline, including instrumentation patterns, costs, and performance characteristics.
 
 ## Pipeline Overview
 
-The pipeline processes questions through eight stages, with automatic quality gates and iterative refinement:
+The pipeline processes each question through seven stages in a single linear pass:
 
 ```
 [1] Embedding → [2] Retrieval → [3] Generation → [4] Claims → 
-[5] Verification → [6] Accuracy → [7] Evaluation → [8] Quality Gate
-                                                         ↓
-                                                    (iterate if needed)
+[5] Verification → [6] Accuracy → [7] Evaluation
 ```
 
 Conceptually the post-generation stages group into **three distinct verification capabilities**,
@@ -19,7 +17,7 @@ each answering a different question and demonstrating a different Workflows patt
 | Capability | Stages | Question it answers |
 |------------|--------|---------------------|
 | **Grounding** | [4] Claims Extraction → [5] Claims Verification | Is every factual statement supported by the retrieved sources? |
-| **Accuracy** | [6] Technical Accuracy | Are there factual/technical errors? (errors + corrections drive the feedback loop) |
+| **Accuracy** | [6] Technical Accuracy | Are there factual/technical errors? (surfaces errors + corrections) |
 | **Quality** | [7] Dual-Model Evaluation | How well does the answer serve the developer, and do two independent judges agree? |
 
 These are deliberately *not* redundant: Grounding checks claims against sources, Accuracy owns
@@ -32,7 +30,7 @@ hard-coded into the generation instructions.
 
 The stage logic below lives in [`backend/pipeline/`](../backend/pipeline/).
 In production it executes as a **Render Workflows** run: the `run_qa_pipeline` orchestrator
-([`workflows/app.py`](../workflows/app.py)) keeps the cheap stages (1, 2, 8) in-process and
+([`workflows/app.py`](../workflows/app.py)) keeps the cheap stages (1, 2) in-process and
 promotes the heavy LLM stages (3, 4, 5) to their own retried subtasks, with stages 6 + 7
 running as three concurrent subtasks on separate instances. See the
 [Architecture section of the README](../README.md#architecture) for the topology.
@@ -192,7 +190,7 @@ async def generate_answer(question: str, context: str) -> dict:
 
 **Capability:** Accuracy — owns *factual correctness*
 
-**Purpose:** Deep factual-grounding validation using Claude. Judges only whether the answer is correct and grounded (not its style or completeness — that is Stage 7's job); its errors + corrections drive the refinement loop
+**Purpose:** Deep factual-grounding validation using Claude. Judges only whether the answer is correct and grounded (not its style or completeness — that is Stage 7's job); surfaces errors + corrections for observability
 
 **Model:** Claude Sonnet 4.6
 
@@ -240,29 +238,6 @@ async def generate_answer(question: str, context: str) -> dict:
 
 ---
 
-## Stage 8: Quality Gate
-
-**Purpose:** Decide whether to return or iterate
-
-**Logic:**
-
-```python
-if average_score >= quality_threshold and iteration < max_iterations:
-    return answer
-else:
-    # Regenerate with feedback from evaluators
-    feedback = merge_evaluator_feedback()
-    iteration += 1
-    goto Stage 3  # with feedback
-```
-
-**Configuration:**
-- Max iterations: 3 (configurable)
-- Quality threshold: 85 (configurable)
-- Success rate: ~88% pass on first iteration
-
----
-
 ## Performance Metrics
 
 ### Cost Breakdown (per question)
@@ -279,17 +254,15 @@ else:
 │ Accuracy Check (Claude)        │ $0.0180  │   22%    │
 │ Quality Rating (Dual)          │ $0.0070  │    9%    │
 ├────────────────────────────────┼──────────┼──────────┤
-│ TOTAL (first iteration)        │ $0.0798  │  100%    │
-│ TOTAL (if 2 iterations)        │ $0.1346  │          │
+│ TOTAL                          │ $0.0798  │  100%    │
 └────────────────────────────────┴──────────┴──────────┘
 ```
 
 ### Response Time Metrics
 
-- **Average Response Time:** 4.2 seconds (first iteration)
+- **Average Response Time:** 4.2 seconds
 - **P95 Response Time:** 8.7 seconds
 - **P99 Response Time:** 12.3 seconds
-- **Iteration Rate:** 12% of questions require refinement
 
 ### Quality Scores
 
@@ -301,11 +274,11 @@ else:
 ### Question Patterns
 
 ```
-Deployment questions:  35% of traffic, 92% first-try success
-Database questions:    28% of traffic, 78% first-try success  ← Higher iteration rate
-Configuration:         20% of traffic, 88% first-try success
-Pricing/Plans:         10% of traffic, 95% first-try success
-Other:                  7% of traffic, 82% first-try success
+Deployment questions:  35% of traffic
+Database questions:    28% of traffic
+Configuration:         20% of traffic
+Pricing/Plans:         10% of traffic
+Other:                  7% of traffic
 ```
 
 ---
@@ -317,7 +290,6 @@ Other:                  7% of traffic, 82% first-try success
 1. **Lower MAX_TOKENS** - Reduce output token limit for generation
 2. **Use smaller models** - Consider GPT-4o-mini for less critical stages
 3. **Cache frequent questions** - Store common Q&A pairs
-4. **Adjust quality threshold** - Lower threshold to reduce iterations
 
 ### Improving Quality
 

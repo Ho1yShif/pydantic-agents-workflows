@@ -126,7 +126,6 @@ class VectorStore:
                         claims JSONB DEFAULT '[]',
                         evaluations JSONB DEFAULT '[]',
                         quality_score FLOAT NOT NULL,
-                        iterations INTEGER NOT NULL,
                         total_cost FLOAT NOT NULL,
                         total_duration_ms FLOAT NOT NULL,
                         trace_id TEXT,
@@ -134,6 +133,13 @@ class VectorStore:
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
+
+                # Migration: the pipeline is now a single linear pass, so the
+                # refinement-loop `iterations` column is obsolete. Drop it from
+                # pre-existing deployments (idempotent; no-op on fresh tables).
+                await conn.execute(
+                    "ALTER TABLE qa_sessions DROP COLUMN IF EXISTS iterations"
+                )
 
                 # Create index for recent sessions
                 await conn.execute("""
@@ -504,7 +510,6 @@ class VectorStore:
         claims: list,
         evaluations: list,
         quality_score: float,
-        iterations: int,
         total_cost: float,
         total_duration_ms: float,
         trace_id: Optional[str] = None,
@@ -523,13 +528,13 @@ class VectorStore:
         
         async with self.pool.acquire() as conn:
             result = await conn.fetchrow("""
-                INSERT INTO qa_sessions 
-                (question, answer, sources, claims, evaluations, quality_score, 
-                 iterations, total_cost, total_duration_ms, trace_id, stages)
-                VALUES ($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10, $11::jsonb)
+                INSERT INTO qa_sessions
+                (question, answer, sources, claims, evaluations, quality_score,
+                 total_cost, total_duration_ms, trace_id, stages)
+                VALUES ($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10::jsonb)
                 RETURNING id
             """, question, answer, sources_json, claims_json, evaluations_json,
-                quality_score, iterations, total_cost, total_duration_ms, trace_id, stages_json)
+                quality_score, total_cost, total_duration_ms, trace_id, stages_json)
             
             session_id = str(result['id'])
             logfire.info(f"Saved Q&A session: {session_id}", trace_id=trace_id)
@@ -583,7 +588,7 @@ class VectorStore:
             rows = await conn.fetch("""
                 SELECT 
                     id, question, answer, sources, claims, evaluations,
-                    quality_score, iterations, total_cost, total_duration_ms,
+                    quality_score, total_cost, total_duration_ms,
                     created_at, trace_id, stages
                 FROM qa_sessions
                 ORDER BY created_at DESC
@@ -618,7 +623,7 @@ class VectorStore:
             row = await conn.fetchrow("""
                 SELECT 
                     id, question, answer, sources, claims, evaluations,
-                    quality_score, iterations, total_cost, total_duration_ms,
+                    quality_score, total_cost, total_duration_ms,
                     created_at, trace_id, stages
                 FROM qa_sessions
                 WHERE id = $1
