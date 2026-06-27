@@ -181,7 +181,7 @@ render-qa-assistant/
 
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) (manages Python 3.13 automatically)
 - Node.js 18+
-- PostgreSQL 16+ (with pgvector extension)
+- PostgreSQL 16+ (with pgvector extension >= 0.5.0, for the HNSW vector index)
 - OpenAI API key
 - Anthropic API key
 - **Logfire account** — sign in at [logfire.pydantic.dev](https://logfire.pydantic.dev), create a project (US region), then:
