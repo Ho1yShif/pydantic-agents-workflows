@@ -10,6 +10,12 @@ from backend.models import Document
 import logfire
 
 
+# Stable key so all instances contend on the same advisory lock when
+# initializing the schema concurrently (e.g. the ingest_all fan-out runs
+# many ingest_source tasks, each calling initialize() on a fresh instance).
+_SCHEMA_INIT_LOCK_KEY = 0x70796167  # "pyag"
+
+
 class VectorStore:
     """PostgreSQL vector store with pgvector extension."""
     
@@ -28,111 +34,121 @@ class VectorStore:
             command_timeout=60
         )
         
-        # Create tables and enable pgvector
+        # Create tables and enable pgvector. Serialize the schema DDL with a
+        # transaction-scoped advisory lock: many instances may call initialize()
+        # at once (the ingest_all fan-out runs an ingest_source per source on its
+        # own instance), and concurrent CREATE OR REPLACE FUNCTION / DROP+CREATE
+        # TRIGGER against the same catalog rows otherwise raises "tuple
+        # concurrently updated". Only one instance runs the block at a time; the
+        # rest wait, then re-run the now-idempotent statements. The lock releases
+        # automatically when the transaction commits.
         async with self.pool.acquire() as conn:
-            # Enable pgvector extension
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-            
-            # Create documents table
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS documents (
-                    id SERIAL PRIMARY KEY,
-                    content TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    section TEXT,
-                    metadata JSONB DEFAULT '{}',
-                    embedding vector(1536),
-                    content_tsv tsvector,
-                    created_at TIMESTAMP DEFAULT NOW()
-                )
-            """)
-            
-            # Create index for vector similarity search
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS documents_embedding_idx 
-                ON documents USING ivfflat (embedding vector_cosine_ops)
-                WITH (lists = 100)
-            """)
-            
-            # Create index for source lookups
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS documents_source_idx 
-                ON documents(source)
-            """)
-            
-            # Create GIN index for full-text search
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS documents_content_tsv_idx 
-                ON documents USING gin(content_tsv)
-            """)
-            
-            # Create trigger function for auto-updating tsvector
-            await conn.execute("""
-                CREATE OR REPLACE FUNCTION documents_tsvector_trigger() RETURNS trigger AS $$
-                BEGIN
-                    NEW.content_tsv := to_tsvector('english', 
-                        coalesce(NEW.title, '') || ' ' || 
-                        coalesce(NEW.section, '') || ' ' || 
-                        coalesce(NEW.content, '')
-                    );
-                    RETURN NEW;
-                END
-                $$ LANGUAGE plpgsql;
-            """)
-            
-            # Create trigger to auto-update tsvector on insert/update
-            await conn.execute("""
-                DROP TRIGGER IF EXISTS documents_tsvector_update ON documents;
-                
-                CREATE TRIGGER documents_tsvector_update 
-                BEFORE INSERT OR UPDATE ON documents
-                FOR EACH ROW 
-                EXECUTE FUNCTION documents_tsvector_trigger();
-            """)
-            
-            # Create sessions table for Q&A history
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS qa_sessions (
-                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                    question TEXT NOT NULL,
-                    answer TEXT NOT NULL,
-                    sources JSONB DEFAULT '[]',
-                    claims JSONB DEFAULT '[]',
-                    evaluations JSONB DEFAULT '[]',
-                    quality_score FLOAT NOT NULL,
-                    iterations INTEGER NOT NULL,
-                    total_cost FLOAT NOT NULL,
-                    total_duration_ms FLOAT NOT NULL,
-                    trace_id TEXT,
-                    stages JSONB DEFAULT '[]',
-                    created_at TIMESTAMP DEFAULT NOW()
-                )
-            """)
-            
-            # Create index for recent sessions
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS qa_sessions_created_at_idx 
-                ON qa_sessions(created_at DESC)
-            """)
-            
-            # Create index for trace_id lookups
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS qa_sessions_trace_id_idx
-                ON qa_sessions(trace_id)
-            """)
+            async with conn.transaction():
+                await conn.execute("SELECT pg_advisory_xact_lock($1)", _SCHEMA_INIT_LOCK_KEY)
 
-            # Live per-stage progress for in-flight pipeline runs. The Workflows
-            # service writes here as it advances through stages; the gateway reads
-            # it while polling so the UI can show real stage-by-stage feedback.
-            # One short-lived row per run, keyed by an opaque progress token.
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS pipeline_progress (
-                    token TEXT PRIMARY KEY,
-                    updates JSONB NOT NULL DEFAULT '[]',
-                    updated_at TIMESTAMP DEFAULT NOW()
-                )
-            """)
+                # Enable pgvector extension
+                await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
+                # Create documents table
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS documents (
+                        id SERIAL PRIMARY KEY,
+                        content TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        section TEXT,
+                        metadata JSONB DEFAULT '{}',
+                        embedding vector(1536),
+                        content_tsv tsvector,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+
+                # Create index for vector similarity search
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS documents_embedding_idx
+                    ON documents USING ivfflat (embedding vector_cosine_ops)
+                    WITH (lists = 100)
+                """)
+
+                # Create index for source lookups
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS documents_source_idx
+                    ON documents(source)
+                """)
+
+                # Create GIN index for full-text search
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS documents_content_tsv_idx
+                    ON documents USING gin(content_tsv)
+                """)
+
+                # Create trigger function for auto-updating tsvector
+                await conn.execute("""
+                    CREATE OR REPLACE FUNCTION documents_tsvector_trigger() RETURNS trigger AS $$
+                    BEGIN
+                        NEW.content_tsv := to_tsvector('english',
+                            coalesce(NEW.title, '') || ' ' ||
+                            coalesce(NEW.section, '') || ' ' ||
+                            coalesce(NEW.content, '')
+                        );
+                        RETURN NEW;
+                    END
+                    $$ LANGUAGE plpgsql;
+                """)
+
+                # Create trigger to auto-update tsvector on insert/update
+                await conn.execute("""
+                    DROP TRIGGER IF EXISTS documents_tsvector_update ON documents;
+
+                    CREATE TRIGGER documents_tsvector_update
+                    BEFORE INSERT OR UPDATE ON documents
+                    FOR EACH ROW
+                    EXECUTE FUNCTION documents_tsvector_trigger();
+                """)
+
+                # Create sessions table for Q&A history
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS qa_sessions (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        question TEXT NOT NULL,
+                        answer TEXT NOT NULL,
+                        sources JSONB DEFAULT '[]',
+                        claims JSONB DEFAULT '[]',
+                        evaluations JSONB DEFAULT '[]',
+                        quality_score FLOAT NOT NULL,
+                        iterations INTEGER NOT NULL,
+                        total_cost FLOAT NOT NULL,
+                        total_duration_ms FLOAT NOT NULL,
+                        trace_id TEXT,
+                        stages JSONB DEFAULT '[]',
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+
+                # Create index for recent sessions
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS qa_sessions_created_at_idx
+                    ON qa_sessions(created_at DESC)
+                """)
+
+                # Create index for trace_id lookups
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS qa_sessions_trace_id_idx
+                    ON qa_sessions(trace_id)
+                """)
+
+                # Live per-stage progress for in-flight pipeline runs. The Workflows
+                # service writes here as it advances through stages; the gateway reads
+                # it while polling so the UI can show real stage-by-stage feedback.
+                # One short-lived row per run, keyed by an opaque progress token.
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS pipeline_progress (
+                        token TEXT PRIMARY KEY,
+                        updates JSONB NOT NULL DEFAULT '[]',
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
 
         logfire.info("Database initialized successfully")
     
