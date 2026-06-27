@@ -9,6 +9,7 @@ typing-extensions>=4.12.2
 pydantic-ai>=0.0.14
 openai>=2.2.0
 anthropic>=0.69.0
+genai-prices>=0.0.67
 
 # Observability (with all instrumentation extras)
 logfire[system-metrics,asyncpg,httpx,openai,fastapi]>=4.12.0
