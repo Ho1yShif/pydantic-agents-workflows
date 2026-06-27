@@ -112,8 +112,8 @@ The frontend connects to a backend FastAPI gateway that triggers a **Render Work
 │  │                                    Anthropic)┘  subtasks  │ │
 │  │ Gate       [8] Quality Gate (Pass or Iterate) in-process │ │
 │  └────────────────────────────────────────────────────────┘ │
-│  Ingestion: ingest_all → ingest_core, then 6 add_* in       │
-│             parallel (replaces the old serial preDeploy)    │
+│  Ingestion: ingest_all → ingest_core, then ingest_source    │
+│             fanned out over the source registry             │
 └─────────────────────────────────────────────────────────────┘
             ↓                                    ↓
 ┌──────────────────────┐           ┌───────────────────────────┐
@@ -143,6 +143,7 @@ render-qa-assistant/
 │   ├── api/
 │   │   └── logs.py                # Logfire logs API endpoint
 │   ├── pipeline/                  # 8-stage pipeline implementation (reused by workflows)
+│   ├── ingestion.py               # Shared embed + replace-by-source helpers
 │   ├── models.py                  # Pydantic models
 │   ├── database.py                # PostgreSQL + pgvector
 │   ├── observability.py           # Logfire configuration
@@ -156,6 +157,8 @@ render-qa-assistant/
 │   └── package.json
 ├── data/
 │   ├── embeddings/                # Pre-embedded documentation
+│   ├── curated/                   # Hand-curated source content (markdown)
+│   ├── sources.py                 # Live-source registry (build strategies + metadata)
 │   └── scripts/                   # Data ingestion scripts
 ├── docs/
 │   ├── PIPELINE.md                # Detailed pipeline guide
@@ -236,7 +239,7 @@ make run-frontend
 > Local-only knobs (`RENDER_USE_LOCAL_DEV`, the Docker `DATABASE_URL`) aren't in any group; in the
 > cloud the SDK uses the platform socket and `DATABASE_URL` is injected from the database.
 
-`make ingest` runs the full pipeline: bulk doc embeddings, plus the curated "special pages" that get explicit-injection into RAG context (pricing, AI agent, autoscaling, Node.js). To re-load just one of those after editing its script, use the per-target shortcuts:
+`make ingest` runs the full pipeline: bulk doc embeddings, plus the curated "special pages" that get explicit-injection into RAG context (pricing, AI agent, autoscaling, Node.js). These live sources are defined in the [`data/sources.py`](./data/sources.py) registry and ingested through the shared build → embed → replace-by-source helpers. To re-load just one of those after editing its registry entry (or curated content), use the per-target shortcuts:
 
 ```bash
 make add-pricing      # render.com/pricing tables

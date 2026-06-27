@@ -35,6 +35,7 @@ from render_sdk import Retry, Workflows
 from backend.observability import pipeline_trace, track_pipeline_metrics
 from backend.config import settings
 from backend.database import vector_store
+from backend.ingestion import embed_documents, replace_source
 from backend.models import AnswerResponse, EvaluationResult, PipelineStageResult
 from backend.prices import load_prices
 from backend.pipeline import (
@@ -47,6 +48,7 @@ from backend.pipeline import (
     verify_claims,
 )
 from backend.pipeline.evaluation import (
+    agreement_level,
     build_evaluation_result,
     evaluate_with_anthropic,
     evaluate_with_openai,
@@ -57,6 +59,7 @@ from workflows.serialization import (
     documents_from_json,
     documents_to_json,
 )
+from data.sources import SOURCES
 
 app = Workflows(
     default_retry=Retry(max_retries=2, wait_duration_ms=1000, backoff_scaling=2.0),
@@ -181,7 +184,11 @@ async def rate_quality_anthropic_task(question: str, answer: str, doc_count: int
 # ---------------------------------------------------------------------------
 
 @app.task(timeout_seconds=600)
-async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
+async def run_qa_pipeline(
+    question: str,
+    session_id: str | None = None,
+    progress_token: str | None = None,
+) -> dict:
     """Orchestrate the Q&A pipeline as one workflow run.
 
     Retrieval (embedding + RAG) runs in-process. The answer is then generated and
@@ -207,8 +214,32 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
         total_cost = 0.0
         pipeline_start = time.time()
 
+        # Live per-stage feedback. Because the pipeline runs out-of-band in the
+        # Workflows service (the gateway only polls for terminal status), we can't
+        # stream events as the original in-process pipeline did. Instead each stage
+        # appends to a cumulative list persisted under `progress_token`; the gateway
+        # reads it on every poll so the UI advances stage-by-stage in real time.
+        # No-ops when no token is supplied (e.g. ingest/manual runs).
+        progress: list[dict] = []
+
+        async def emit(stage: str, status: str, message: str, pct: float, cost: float) -> None:
+            if not progress_token:
+                return
+            progress.append({
+                "stage": stage,
+                "status": status,
+                "message": message,
+                "progress": round(min(pct, 100.0), 1),
+                "cost_so_far": round(cost, 4),
+            })
+            try:
+                await vector_store.record_progress(progress_token, progress)
+            except Exception as e:  # noqa: BLE001 - progress is best-effort
+                logfire.warning(f"Failed to record progress: {e}")
+
         # --- Retrieval phase (in-process): embedding + RAG ---
         # Question embedding
+        await emit("question_embedding", "started", "Embedding your question...", 5, total_cost)
         embed_result = await embed_question(question)
         stages.append(_stage_result(
             "question_embedding",
@@ -218,8 +249,10 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
             metadata={"embedding_dimensions": len(embed_result["embedding"])},
         ))
         total_cost += embed_result["cost_usd"]
+        await emit("question_embedding", "completed", "Question embedded", 12.5, total_cost)
 
         # RAG retrieval (multi-query expansion + curated-doc injection run in-process)
+        await emit("rag_retrieval", "started", "Searching documentation...", 15, total_cost)
         retrieval_result = await retrieve_documents(
             embed_result["embedding"], original_question=question
         )
@@ -234,8 +267,14 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
         ))
         total_cost += retrieval_result["cost_usd"]
         documents = retrieval_result["documents"]
+        await emit(
+            "rag_retrieval", "completed",
+            f"Found {len(documents)} relevant documents", 25, total_cost,
+        )
 
-        # Iterative quality refinement loop
+        # Iterative quality refinement loop. Each iteration gets an equal share of
+        # the 25%–85% progress band (mirrors the original streamed pipeline).
+        iter_span = 60 / settings.max_iterations
         current_iteration = 1
         feedback = None
         answer_text = ""
@@ -246,8 +285,14 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
 
         while current_iteration <= settings.max_iterations:
             logfire.info(f"Starting iteration {current_iteration}")
+            p = 25 + (current_iteration - 1) * iter_span  # progress baseline for this iteration
 
             # --- Generate phase: the expensive Claude call as a retried subtask ---
+            await emit(
+                f"generation_iter_{current_iteration}", "started",
+                f"Generating answer (iteration {current_iteration})...",
+                min(p + 0.05 * iter_span, 95), total_cost,
+            )
             gen_result = await generate_answer_task(question, documents_to_json(documents), feedback)
             stages.append(_stage_result(
                 "answer_generation",
@@ -259,9 +304,17 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
             ))
             total_cost += gen_result["cost_usd"]
             answer_text = gen_result["answer"]
+            await emit(
+                f"generation_iter_{current_iteration}", "completed", "Answer generated",
+                min(p + 0.20 * iter_span, 95), total_cost,
+            )
 
             # --- Grounding phase: extract claims, then verify them against sources ---
             # Claims extraction (own retried task)
+            await emit(
+                f"claims_iter_{current_iteration}", "started", "Extracting factual claims...",
+                min(p + 0.30 * iter_span, 95), total_cost,
+            )
             claims_result = await extract_claims_task(answer_text)
             stages.append(_stage_result(
                 "claims_extraction",
@@ -272,8 +325,17 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
                 metadata={"claims_extracted": len(claims_result["claims"])},
             ))
             total_cost += claims_result["cost_usd"]
+            await emit(
+                f"claims_iter_{current_iteration}", "completed",
+                f"Extracted {len(claims_result['claims'])} claims",
+                min(p + 0.40 * iter_span, 95), total_cost,
+            )
 
             # Claims verification (own task; per-claim gather stays in-process inside it)
+            await emit(
+                f"verification_iter_{current_iteration}", "started", "Verifying claims...",
+                min(p + 0.50 * iter_span, 95), total_cost,
+            )
             verification_result = await verify_claims_task(claims_result["claims"])
             verified_claims = claims_from_json(verification_result["verified_claims"])
             verification_rate = verification_result["verification_rate"] * 100
@@ -290,12 +352,22 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
                 },
             ))
             total_cost += verification_result["cost_usd"]
+            await emit(
+                f"verification_iter_{current_iteration}", "completed",
+                f"{verification_rate:.0f}% claims verified",
+                min(p + 0.60 * iter_span, 95), total_cost,
+            )
 
             # --- Accuracy + Quality phase: fan out to three parallel subtasks ---
             # Accuracy (factual-grounding review) and the two Quality judges
             # (developer-experience rating) have no mutual dependency, so they run on
             # three parallel instances. The average score and inter-judge agreement
             # are combined here (the judges already ran through build_evaluation_result).
+            await emit(
+                f"accuracy_iter_{current_iteration}", "started",
+                "Checking accuracy & quality in parallel...",
+                min(p + 0.70 * iter_span, 95), total_cost,
+            )
             stage_start = time.time()
             accuracy_result, openai_rate, anthropic_rate = await asyncio.gather(
                 check_accuracy_task(answer_text, claims_to_json(verified_claims)),
@@ -309,8 +381,7 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
             anthropic_eval = EvaluationResult.model_validate(anthropic_rate["evaluation"])
             evaluations = [openai_eval, anthropic_eval]
             average_score = (openai_eval.score + anthropic_eval.score) / 2
-            score_difference = abs(openai_eval.score - anthropic_eval.score)
-            agreement_level = "high" if score_difference <= 5 else "medium" if score_difference <= 15 else "low"
+            agreement = agreement_level(abs(openai_eval.score - anthropic_eval.score))
             eval_cost = openai_rate["cost_usd"] + anthropic_rate["cost_usd"]
             stages.append(_stage_result(
                 "technical_accuracy",
@@ -322,6 +393,11 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
                 metadata={"accuracy_score": accuracy_score},
             ))
             total_cost += accuracy_result["cost_usd"]
+            await emit(
+                f"accuracy_iter_{current_iteration}", "completed",
+                f"Accuracy score: {accuracy_score}/100",
+                min(p + 0.80 * iter_span, 95), total_cost,
+            )
             stages.append(_stage_result(
                 "quality_evaluation",
                 iteration=current_iteration,
@@ -332,12 +408,21 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
                     "quality_score": f"{average_score:.1f}",
                     "openai_score": openai_eval.score,
                     "claude_score": anthropic_eval.score,
-                    "agreement": agreement_level,
+                    "agreement": agreement,
                 },
             ))
             total_cost += eval_cost
+            await emit(
+                f"evaluation_iter_{current_iteration}", "completed",
+                f"Quality score: {average_score:.1f}/100",
+                min(p + 0.90 * iter_span, 95), total_cost,
+            )
 
             # --- Quality gate (in-process): return, or refine with feedback ---
+            await emit(
+                f"quality_gate_iter_{current_iteration}", "started", "Checking quality gate...",
+                min(p + 0.95 * iter_span, 95), total_cost,
+            )
             gate_result = await quality_gate_decision(
                 average_score=average_score,
                 evaluations=evaluations,
@@ -358,9 +443,18 @@ async def run_qa_pipeline(question: str, session_id: str | None = None) -> dict:
 
             if not gate_result["should_iterate"]:
                 logfire.info(f"Quality gate passed: {gate_result['reason']}")
+                await emit(
+                    f"quality_gate_iter_{current_iteration}", "completed",
+                    "Quality gate passed!", 95, total_cost,
+                )
                 break
 
             logfire.info(f"Quality gate requires iteration: {gate_result['reason']}")
+            await emit(
+                f"quality_gate_iter_{current_iteration}", "completed",
+                f"Refining answer... ({gate_result['reason']})",
+                min(p + iter_span, 85), total_cost,
+            )
             feedback = gate_result["feedback"]
             current_iteration += 1
 
@@ -428,83 +522,58 @@ async def _persist_session(response: AnswerResponse) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Ingestion — parallel fan-out (replaces the sequential preDeployCommand)
+# Ingestion — source-oriented, data-driven
+#
+# Every live source is the same shape — build docs → embed → replace-by-source —
+# so it's modeled as ONE parameterized task driven by the `SOURCES` registry,
+# not six near-identical scripts/tasks. `ingest_source` is the meaningful unit of
+# work (independently retryable per source); `ingest_all` fans them out, where
+# the heavier sources (pricing's multi-table parse, the tutorials crawl) make
+# cross-instance parallelism worth the spin-up.
 # ---------------------------------------------------------------------------
-
-async def _run_ingest_script(module_name: str) -> dict:
-    """Import ``data.scripts.<module_name>``, run its ``main()``, report status."""
-    import importlib
-
-    module = importlib.import_module(f"data.scripts.{module_name}")
-    await module.main()
-    return {"task": module_name, "status": "ok"}
-
 
 @app.task(timeout_seconds=1800)
 async def ingest_core() -> dict:
-    """Core documentation ingest (additive sync). Establishes the base schema/rows."""
+    """Core documentation ingest (additive sync). Establishes the base schema/rows.
+
+    Loads the pre-embedded corpus (``data/embeddings/render_docs.json``, built
+    offline by ``generate_embeddings.py``) into pgvector, so deploy-time ingest
+    pays no embedding cost.
+    """
     from data.scripts import ingest_docs
 
     await ingest_docs.main(sync=True)
     return {"task": "ingest_core", "status": "ok"}
 
 
-# Each page injector is its own named, retried task so the fan-out below can run
-# it on a separate instance — the bodies just delegate to _run_ingest_script.
+@app.task(retry=Retry(max_retries=2, wait_duration_ms=1000))
+async def ingest_source(name: str) -> dict:
+    """Ingest one live source end-to-end: build → embed → replace-by-source.
 
-@app.task
-async def add_pricing() -> dict:
-    """Inject the pricing page."""
-    return await _run_ingest_script("add_pricing_page")
-
-
-@app.task
-async def add_workflows_tutorial() -> dict:
-    """Inject the Workflows tutorial page."""
-    return await _run_ingest_script("add_workflows_tutorial_page")
-
-
-@app.task
-async def add_workflows_docs() -> dict:
-    """Inject the Workflows docs page."""
-    return await _run_ingest_script("add_workflows_docs_page")
-
-
-@app.task
-async def add_autoscaling() -> dict:
-    """Inject the autoscaling page."""
-    return await _run_ingest_script("add_autoscaling_page")
-
-
-@app.task
-async def add_nodejs() -> dict:
-    """Inject the Node.js page."""
-    return await _run_ingest_script("add_nodejs_page")
-
-
-@app.task
-async def add_tutorials_index() -> dict:
-    """Inject the tutorials index page."""
-    return await _run_ingest_script("add_tutorials_index_page")
+    ``name`` is a key in the ``data.sources.SOURCES`` registry. Each source is an
+    independently retryable unit — a transient fetch/embed failure retries just
+    this source rather than re-running the whole corpus refresh.
+    """
+    await _ensure_ready(db=True)
+    src = SOURCES[name]
+    docs = await embed_documents(await src.build())
+    inserted = await replace_source(src.source_url, docs, legacy=src.legacy_sources)
+    return {"task": name, "status": "ok", "inserted": inserted}
 
 
 @app.task(timeout_seconds=3600)
 async def ingest_all() -> dict:
-    """Run the full ingestion as a parallel fan-out.
+    """Run the full ingestion: core sync, then the live sources fanned out.
 
-    ``ingest_core`` runs first to establish the base schema/rows, then the six
-    independent page-injection tasks fan out concurrently — replacing the old
-    7-script sequential ``&&`` chain.
+    ``ingest_core`` runs first to establish the base schema/rows, then every
+    source in the registry is ingested concurrently via ``ingest_source`` —
+    replacing the old 7-script sequential ``&&`` chain (and the six
+    near-identical ``add_*`` tasks).
     """
     core = await ingest_core()
 
     page_results = await asyncio.gather(
-        add_pricing(),
-        add_workflows_tutorial(),
-        add_workflows_docs(),
-        add_autoscaling(),
-        add_nodejs(),
-        add_tutorials_index(),
+        *(ingest_source(name) for name in SOURCES)
     )
 
     return {"core": core, "pages": list(page_results)}
