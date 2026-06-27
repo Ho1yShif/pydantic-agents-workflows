@@ -283,8 +283,10 @@ async def run_qa_pipeline(
         evaluations = []
         average_score = 0.0
 
+        iterations_run = 0
         while current_iteration <= settings.max_iterations:
             logfire.info(f"Starting iteration {current_iteration}")
+            iterations_run = current_iteration  # the iteration actually executing
             p = 25 + (current_iteration - 1) * iter_span  # progress baseline for this iteration
 
             # --- Generate phase: the expensive Claude call as a retried subtask ---
@@ -468,7 +470,7 @@ async def run_qa_pipeline(
             quality_score=average_score,
             accuracy_score=accuracy_score,
             evaluations=evaluations,
-            iterations=current_iteration,
+            iterations=iterations_run,
             total_cost=total_cost,
             total_duration_ms=total_duration_ms,
             stages=stages,
@@ -485,7 +487,7 @@ async def run_qa_pipeline(
             total_duration_ms=total_duration_ms,
             quality_score=average_score,
             accuracy_score=accuracy_score,
-            iterations=current_iteration,
+            iterations=iterations_run,
             session_id=response.session_id,
         )
 
