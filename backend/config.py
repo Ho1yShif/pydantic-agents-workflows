@@ -36,10 +36,15 @@ class Settings(BaseSettings):
     timeout_seconds: int = 30
     
     # RAG Configuration
-    rag_top_k: int = 20  # Ceiling on retrieved docs, not a fixed quota (see hybrid_search)
-    # Real relevance gate: a doc is returned only if its cosine similarity >= this value,
-    # so the result count varies with the question. Tune up (~0.4-0.5) if broad questions
-    # still return too many low-relevance docs; down if narrow questions return too few.
+    rag_top_k: int = 10  # Hard ceiling / backstop on retrieved docs. The adaptive relative
+    # cutoff (see _apply_relative_cutoff) is what trims the tail per question; this just caps it.
+    # Adaptive relevance cutoff: keep a doc only if its cosine similarity is >= this fraction
+    # of the BEST match in the result set. Anchoring to the top match self-tunes per question —
+    # a strong topic (best ~0.65) gates high and drops its tail, a weak-but-valid one keeps its
+    # cluster. Raise toward 0.8 for fewer/tighter sources, lower toward 0.6 to be more inclusive.
+    relevance_cutoff_fraction: float = 0.75
+    # Hard floor beneath the relative cutoff: a doc is never returned below this cosine, so even
+    # a question whose best match is weak can't admit sub-threshold noise. Gates the final set.
     similarity_threshold: float = 0.3
     verification_threshold: float = 0.30  # Similarity threshold for claim verification (lowered to catch explicit facts)
     embedding_model: str = "text-embedding-3-small"

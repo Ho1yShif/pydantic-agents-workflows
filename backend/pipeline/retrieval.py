@@ -253,6 +253,40 @@ def detect_pricing_query(question: str) -> List[str]:
     return list(tables_to_inject)
 
 
+def _apply_relative_cutoff(documents: List[Document]) -> List[Document]:
+    """Keep only docs competitive with the best retrieved match.
+
+    A fixed absolute threshold can't tell a strong topic (best cosine ~0.65) from a
+    weak one (best ~0.45) — at a low floor it lets a long tail of marginally-relevant
+    docs through on broad questions. Anchoring the cutoff to the top match self-tunes:
+    strong topics gate high and shed their tail, weak-but-valid topics keep their cluster.
+
+    Anchors on the highest cosine in the set (not documents[0] — hybrid_search orders by
+    RRF, so position 0 isn't guaranteed to be the top cosine) and drops anything below
+    relevance_cutoff_fraction * top, with similarity_threshold as a hard floor. Returns
+    survivors sorted by cosine desc so the weakest sit at the tail (lets the injection
+    cap drop true-lowest-cosine docs).
+    """
+    if not documents:
+        return documents
+
+    top = max(doc.similarity_score for doc in documents)
+    cutoff = max(settings.similarity_threshold, top * settings.relevance_cutoff_fraction)
+    kept = sorted(
+        (doc for doc in documents if doc.similarity_score >= cutoff),
+        key=lambda doc: doc.similarity_score,
+        reverse=True,
+    )
+    logfire.info(
+        "Applied adaptive relevance cutoff",
+        top=top,
+        cutoff=cutoff,
+        before=len(documents),
+        after=len(kept),
+    )
+    return kept
+
+
 async def inject_curated_docs(question: str, existing_docs: List[Document]) -> List[Document]:
     """
     Ensure the canonical doc for a matched topic is present — without padding the count.
@@ -436,6 +470,11 @@ async def retrieve_documents(embedding: List[float], original_question: str = No
             threshold=settings.similarity_threshold,
             bm25_weight=0.4  # 60% semantic, 40% BM25 - favors semantic but includes keyword matches
         )
+
+    # Adaptive relevance cutoff: drop the long tail of marginally-relevant docs by
+    # keeping only those competitive with the best match. Applied BEFORE injection so
+    # the curated docs (pinned at INJECTED_DOC_SCORE=1.0) don't poison the anchor.
+    documents = _apply_relative_cutoff(documents)
 
     # Curated-doc injection (replace-weakest): ensure the canonical doc for a matched
     # topic is present and top-ranked, without padding the count past rag_top_k.
