@@ -6,10 +6,17 @@ by generate_embeddings.py and crawl_tutorials.py. Keeping this in one place mean
 the bulk-docs corpus and the tutorials crawl chunk content identically.
 """
 
+import re
 from typing import Dict, List, Optional
 
 MAX_CHUNK_CHARS = 2000
 MIN_CHUNK_CHARS = 100
+
+# Below this, a heading section is too small to stand alone (e.g. a heading with
+# a one-line body); it gets merged into the previous section's chunk instead.
+_MERGE_FLOOR_CHARS = 60
+
+_HEADING_RE = re.compile(r"(?m)^(#{2,3}\s+.*)$")
 
 
 def chunk_document(
@@ -77,5 +84,72 @@ def chunk_document(
 
     if current_chunk:
         docs.append(_doc(separator.join(current_chunk)))
+
+    return docs
+
+
+def chunk_markdown_by_heading(
+    title: str,
+    source: str,
+    content: str,
+    max_chars: int = MAX_CHUNK_CHARS,
+) -> List[Dict]:
+    """Split structured markdown into one focused chunk per ``##``/``###`` section.
+
+    Hand-curated docs pack many distinct facts into one page. A single whole-page
+    embedding (or even ~2000-char chunks) dilutes any one fact, so a narrow claim
+    like "billed prorated by the second" can't surface its supporting passage in a
+    top-k similarity search and fails verification. Splitting on headings gives each
+    fact-cluster its own embedding, with the heading text (e.g. "Pricing", "Beta
+    Limitations") kept in the chunk so it matches the claim's vocabulary.
+
+    Behavior:
+    - The pre-heading preamble (page H1 + "Source:" line) is dropped — it carries no
+      verifiable facts and only dilutes the first section.
+    - A section longer than ``max_chars`` falls back to paragraph chunking.
+    - A section too small to stand alone is merged into the previous chunk.
+    - Content with no ``##``/``###`` headings falls back to ``chunk_document``.
+
+    The section heading becomes each doc's ``section``; ``title`` stays the page title.
+    """
+    clean_content = content.strip()
+    if len(clean_content) < MIN_CHUNK_CHARS:
+        return []
+
+    # re.split with a captured group yields: [preamble, heading1, body1, heading2, body2, ...]
+    parts = _HEADING_RE.split(clean_content)
+    headings_and_bodies = parts[1:]
+    if not headings_and_bodies:
+        # No section headings to split on — fall back to size-based chunking.
+        return chunk_document(title, None, source, content, max_chars)
+
+    def _doc(section: str, chunk_content: str) -> Dict:
+        return {
+            "title": f"{title} - {section}",
+            "section": section,
+            "source": source,
+            "content": chunk_content,
+        }
+
+    docs: List[Dict] = []
+    for i in range(0, len(headings_and_bodies), 2):
+        heading_line = headings_and_bodies[i].strip()
+        body = headings_and_bodies[i + 1].strip() if i + 1 < len(headings_and_bodies) else ""
+        section = re.sub(r"^#{2,3}\s+", "", heading_line).strip()
+        text = f"{heading_line}\n\n{body}".strip() if body else heading_line
+
+        # Merge a too-small section into the previous chunk rather than emit dust.
+        if len(text) < _MERGE_FLOOR_CHARS and docs:
+            docs[-1]["content"] = f"{docs[-1]['content']}\n\n{text}"
+            continue
+
+        # Sub-split an oversized section at paragraph boundaries.
+        if len(text) > max_chars:
+            docs.extend(
+                {**sub, "title": f"{title} - {section}"}
+                for sub in chunk_document(title, section, source, text, max_chars)
+            )
+        else:
+            docs.append(_doc(section, text))
 
     return docs

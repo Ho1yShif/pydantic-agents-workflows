@@ -30,7 +30,7 @@ from bs4 import BeautifulSoup
 # crawl_tutorials / chunking live in data/scripts, so put that directory on the
 # path before importing from them.
 sys.path.insert(0, str(Path(__file__).parent / "scripts"))
-from chunking import chunk_document  # noqa: E402
+from chunking import chunk_document, chunk_markdown_by_heading  # noqa: E402
 from crawl_tutorials import fetch_tutorial_index  # noqa: E402
 
 Doc = dict[str, Any]
@@ -57,18 +57,26 @@ def _curated_build(
 ) -> Callable[[], Awaitable[list[Doc]]]:
     """Build chunked docs from the curated markdown file ``data/curated/<name>.md``.
 
-    The content is split with the same ``chunk_document`` utility the bulk corpus
-    and tutorials crawl use, so each fact gets its own focused embedding. (A single
-    monolithic embedding per page made specific claims fail verification — they
-    couldn't surface the whole-page blob in a top-5 similarity search.)
+    Curated docs are split per ``##``/``###`` section (see ``chunk_markdown_by_heading``)
+    so each fact-cluster gets its own focused embedding. A whole-page (or even
+    ~2000-char) embedding dilutes any single fact, so narrow claims couldn't surface
+    their supporting passage in a top-k similarity search and failed verification.
+    Section-level chunks keep the heading vocabulary ("Pricing", "Beta Limitations")
+    with the body, so the claim matches the section that actually states it.
 
     The curated content is hand-structured for semantic retrieval, so (unlike the
     old scripts) we don't make a throwaway live fetch — the result was always
     discarded in favor of the curated text anyway.
+
+    ``section`` is retained as a fallback for files with no headings (the chunker
+    then falls back to size-based ``chunk_document``).
     """
 
     async def build() -> list[Doc]:
         content = (CURATED_DIR / f"{name}.md").read_text(encoding="utf-8")
+        chunks = chunk_markdown_by_heading(title, source_url, content)
+        if not chunks:  # no headings → size-based fallback keeps the supplied section
+            chunks = chunk_document(title, section, source_url, content)
         return [
             {
                 "content": chunk["content"],
@@ -76,7 +84,7 @@ def _curated_build(
                 "section": chunk["section"],
                 "metadata": metadata,
             }
-            for chunk in chunk_document(title, section, source_url, content)
+            for chunk in chunks
         ]
 
     return build
