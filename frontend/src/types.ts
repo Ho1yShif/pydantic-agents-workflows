@@ -41,7 +41,6 @@ export interface AnswerResponse {
   quality_score: number
   accuracy_score?: number
   evaluations: EvaluationResult[]
-  iterations: number
   total_cost: number
   total_duration_ms: number
   stages: PipelineStageResult[]

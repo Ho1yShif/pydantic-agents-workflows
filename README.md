@@ -29,7 +29,7 @@ This is an **AI-powered Q&A assistant for Render documentation**. Users can ask 
 ### User Experience
 
 1. **Ask a question** - "How do I deploy a Node.js app on Render?" or "What database plans are available?"
-2. **Watch the pipeline** - Track progress as the run moves through 8 stages (embedding → retrieval → generation → verification)
+2. **Watch the pipeline** - Track progress as the run moves through 7 stages (embedding → retrieval → generation → verification)
 3. **Get accurate answers** - Receive detailed responses with sources from Render docs
 4. **Quality guaranteed** - Every answer is verified for accuracy and rated by dual AI evaluators
 
@@ -38,7 +38,6 @@ This is an **AI-powered Q&A assistant for Render documentation**. Users can ask 
 - **Hybrid search** - Combines semantic understanding with keyword matching for better retrieval
 - **Three verification capabilities** - Each answer goes through *Grounding* (extract claims, verify them against the retrieved sources), *Accuracy* (a factual-correctness review), and *Quality* (a dual-model developer-experience rating) — distinct checks, not redundant ones
 - **Neutral, grounded answers** - The assistant answers only from retrieved documentation, with no product-favorable steering in the prompt; relevant Render docs surface through retrieval, not by being force-sold
-- **Iterative refinement** - Automatically regenerates low-quality answers with feedback
 - **Cost tracking** - See exactly how much each question costs to answer
 - **Parallel fan-out** - The pipeline runs on [Render Workflows](https://render.com/docs/workflows), fanning out the Accuracy + dual-model Quality checks across instances so they execute concurrently
 
@@ -62,7 +61,7 @@ This is an **AI-powered Q&A assistant for Render documentation**. Users can ask 
 - **Cost Tracking** - Per-stage and per-execution cost attribution with custom metrics
 - **Multi-Model Evals** - Dual-rater quality assessment (OpenAI + Anthropic)
 - **Session Tracking** - End-to-end user journey with distributed tracing
-- **Custom Metrics** - Business-specific metrics (cost, quality, iterations)
+- **Custom Metrics** - Business-specific metrics (cost, quality, accuracy)
 - **SQL Queries** - Custom analytics on AI performance
 
 ### Pydantic Stack
@@ -79,7 +78,7 @@ This project is built end-to-end on the [Pydantic](https://pydantic.dev/) ecosys
 
 ## Architecture
 
-The frontend connects to a backend FastAPI gateway that triggers a **Render Workflows** run and polls it for the result. The 8-stage pipeline and ingestion execute as workflow tasks that fan out across instances.
+The frontend connects to a backend FastAPI gateway that triggers a **Render Workflows** run and polls it for the result. The 7-stage pipeline and ingestion execute as workflow tasks that fan out across instances.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -110,7 +109,6 @@ The frontend connects to a backend FastAPI gateway that triggers a **Render Work
 │  │ Accuracy   [6] Factual-grounding   (Claude) ┐            │ │
 │  │ Quality    [7] Dual-model rating   (OpenAI+ ├─ 3 parallel│ │
 │  │                                    Anthropic)┘  subtasks  │ │
-│  │ Gate       [8] Quality Gate (Pass or Iterate) in-process │ │
 │  └────────────────────────────────────────────────────────┘ │
 │  Ingestion: ingest_all → ingest_core, then ingest_source    │
 │             fanned out over the source registry             │
@@ -129,7 +127,7 @@ The frontend connects to a backend FastAPI gateway that triggers a **Render Work
 ```
 
 > **Why hybrid?** Workflows aren't HTTP-facing, so a client (the gateway) triggers tasks
-> via the SDK and reads run status. Stages 1, 2, and 8 are cheap/data-dependent and stay
+> via the SDK and reads run status. Stages 1 and 2 are cheap/data-dependent and stay
 > in-process on the orchestrator; only the heavy, independently-retryable LLM stages are
 > promoted to their own tasks. Stages 6 + 7 run as three concurrent subtasks on separate
 > instances. See [`workflows/app.py`](./workflows/app.py).
@@ -142,7 +140,7 @@ render-qa-assistant/
 │   ├── main.py                    # FastAPI gateway (triggers + polls workflow runs)
 │   ├── api/
 │   │   └── logs.py                # Logfire logs API endpoint
-│   ├── pipeline/                  # 8-stage pipeline implementation (reused by workflows)
+│   ├── pipeline/                  # 7-stage pipeline implementation (reused by workflows)
 │   ├── ingestion.py               # Shared embed + replace-by-source helpers
 │   ├── models.py                  # Pydantic models
 │   ├── database.py                # PostgreSQL + pgvector
@@ -392,10 +390,9 @@ exists (step 3):
 > linked to it, so the gateway and cron both pick up `WORKFLOW_SLUG` from a single edit.
 
 **Auto-filled, no action needed:** `DATABASE_URL` (injected from the database service) and the
-rest of `pydantic-agents-workflows-pipeline`'s config (`QUALITY_THRESHOLD`, `ACCURACY_THRESHOLD`, `AGREEMENT_THRESHOLD`,
-`MAX_ITERATIONS`, `MAX_TOKENS`, `TIMEOUT_SECONDS`, `RAG_TOP_K`, `SIMILARITY_THRESHOLD`,
-`VERIFICATION_THRESHOLD`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, the model-selection vars,
-`ENABLE_CACHING`, `LOG_LEVEL`) ship with sensible defaults in `render.yaml`.
+rest of `pydantic-agents-workflows-pipeline`'s config (`MAX_TOKENS`, `TIMEOUT_SECONDS`, `RAG_TOP_K`,
+`SIMILARITY_THRESHOLD`, `VERIFICATION_THRESHOLD`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, the
+model-selection vars, `ENABLE_CACHING`, `LOG_LEVEL`) ship with sensible defaults in `render.yaml`.
 
 ### 5. Wire the frontend to the backend
 
@@ -433,7 +430,7 @@ Once the corpus is seeded, you can run the Q&A pipeline directly in the [Render 
 
 ### Core Guides
 
-- **[docs/PIPELINE.md](./docs/PIPELINE.md)** - Detailed breakdown of the 8-stage pipeline
+- **[docs/PIPELINE.md](./docs/PIPELINE.md)** - Detailed breakdown of the 7-stage pipeline
 - **[docs/OBSERVABILITY.md](./docs/OBSERVABILITY.md)** - Comprehensive Logfire instrumentation guide
 - **[docs/CONFIGURATION.md](./docs/CONFIGURATION.md)** - All configuration options and tuning
 - **[docs/HYBRID_SEARCH.md](./docs/HYBRID_SEARCH.md)** - Technical deep-dive on hybrid search

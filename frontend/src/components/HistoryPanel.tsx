@@ -46,7 +46,6 @@ export default function HistoryPanel({ onLoadSession, isOpen, onToggle }: Histor
       claims: session.claims,
       quality_score: session.quality_score,
       evaluations: session.evaluations,
-      iterations: session.iterations,
       total_cost: session.total_cost,
       total_duration_ms: session.total_duration_ms,
       stages: session.stages || [],

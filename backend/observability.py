@@ -191,75 +191,49 @@ def track_pipeline_metrics(
     total_duration_ms: float,
     quality_score: float,
     accuracy_score: float,
-    iterations: int,
     session_id: str = None
 ):
     """
     Track custom business metrics for the pipeline execution.
-    
+
     These metrics enable analysis of:
     - Cost trends and optimization opportunities
     - Quality score distributions
     - Performance characteristics
-    - Iteration patterns
     """
-    
+
     # Track total cost per request
     logfire.metric_histogram("pipeline.cost.total", unit="USD").record(
         total_cost,
         attributes={
-            "iterations": iterations,
             "session_id": session_id or "unknown",
         },
     )
-    
-    # Track cost per iteration (normalized)
-    cost_per_iteration = total_cost / iterations if iterations > 0 else total_cost
-    logfire.metric_histogram("pipeline.cost.per_iteration", unit="USD").record(
-        cost_per_iteration,
-        attributes={
-            "iterations": iterations,
-            "session_id": session_id or "unknown",
-        },
-    )
-    
+
     # Track pipeline duration
     logfire.metric_histogram("pipeline.duration", unit="ms").record(
         total_duration_ms,
         attributes={
-            "iterations": iterations,
             "session_id": session_id or "unknown",
         },
     )
-    
+
     # Track quality score distribution
     logfire.metric_histogram("pipeline.quality_score", unit="score").record(
         quality_score,
         attributes={
-            "iterations": iterations,
-            "passed_first_iteration": iterations == 1,
             "session_id": session_id or "unknown",
         },
     )
-    
+
     # Track accuracy score
     logfire.metric_histogram("pipeline.accuracy_score", unit="score").record(
         accuracy_score,
         attributes={
-            "iterations": iterations,
             "session_id": session_id or "unknown",
         },
     )
-    
-    # Track iteration count distribution
-    logfire.metric_histogram("pipeline.iterations", unit="count").record(
-        iterations,
-        attributes={
-            "quality_score_bucket": f"{int(quality_score // 10) * 10}-{int(quality_score // 10) * 10 + 10}",
-            "session_id": session_id or "unknown",
-        },
-    )
-    
+
     # Log structured event for queryability
     logfire.info(
         "Pipeline execution completed",
@@ -268,9 +242,6 @@ def track_pipeline_metrics(
         duration_ms=total_duration_ms,
         quality_score=quality_score,
         accuracy_score=accuracy_score,
-        iterations=iterations,
-        cost_per_iteration=cost_per_iteration,
-        passed_first_iteration=iterations == 1,
         session_id=session_id or "unknown",
     )
 

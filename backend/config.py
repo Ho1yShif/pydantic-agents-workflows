@@ -28,10 +28,6 @@ class Settings(BaseSettings):
     workflow_slug: str = ""  # e.g. "pydantic-agents-pipeline" (from the Workflow's Dashboard page)
     
     # Pipeline Configuration
-    quality_threshold: int = 85
-    accuracy_threshold: int = 70  # Based on empirical avg of 73 (was 80, too strict)
-    agreement_threshold: int = 10
-    max_iterations: int = 1  # First iteration is best; further iterations degrade quality
     max_tokens: int = 4000  # Answer generation budget; raised from 2000 so broad answers aren't truncated
     timeout_seconds: int = 30
     
@@ -77,7 +73,6 @@ class PipelineConfig:
     STAGE_VERIFICATION = "claims_verification"
     STAGE_ACCURACY = "technical_accuracy"
     STAGE_EVALUATION = "quality_evaluation"
-    STAGE_QUALITY_GATE = "quality_gate"
 
 
 # Global settings instance

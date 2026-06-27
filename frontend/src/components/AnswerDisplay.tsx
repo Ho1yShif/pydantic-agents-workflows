@@ -308,10 +308,6 @@ export default function AnswerDisplay({ answer }: AnswerDisplayProps) {
               <h3 className="text-sm font-semibold text-white mb-3">Execution summary</h3>
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
-                  <span className="text-zinc-400">Iterations:</span>
-                  <span className="ml-2 text-white font-medium">{answer.iterations}</span>
-                </div>
-                <div>
                   <span className="text-zinc-400">Total Duration:</span>
                   <span className="ml-2 text-white font-medium">
                     {answer.total_duration_ms < 1000

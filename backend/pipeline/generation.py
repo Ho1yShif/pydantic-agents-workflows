@@ -1,6 +1,6 @@
 """Stage 3: Answer Generation."""
 
-from typing import List, Optional
+from typing import List
 
 from backend.config import settings, PipelineConfig
 from backend.models import Document
@@ -24,8 +24,7 @@ _answer_agent = anthropic_agent(settings.answer_model, ANSWER_GENERATION_INSTRUC
 @instrument_stage(PipelineConfig.STAGE_GENERATION)
 async def generate_answer(
     question: str,
-    documents: List[Document],
-    feedback: Optional[str] = None
+    documents: List[Document]
 ) -> dict:
     """
     Generate comprehensive answer using retrieved context.
@@ -33,7 +32,6 @@ async def generate_answer(
     Args:
         question: The user's question
         documents: Retrieved documentation chunks
-        feedback: Optional feedback from previous iteration
 
     Returns:
         dict with 'answer', 'input_tokens', 'output_tokens', 'cost_usd'
@@ -43,7 +41,6 @@ async def generate_answer(
         "Generating answer with Claude",
         num_documents=len(documents),
         question_length=len(question),
-        has_feedback=feedback is not None,
         model=settings.answer_model
     )
 
@@ -61,22 +58,10 @@ async def generate_answer(
     context = "\n\n".join(context_parts)
 
     # Build the user prompt
-    feedback_text = ""
-    if feedback:
-        feedback_text = f"""
-Feedback from quality check:
-{feedback}
-
-When revising, only add details that are explicitly in the provided documents.
-Keep product-specific features separate (e.g. label "Postgres:" vs "Key Value:")
-and do not generalize "both support X" unless both products show it in the context.
-When in doubt, be less comprehensive but more accurate."""
-
     user_prompt = f"""Context from Render documentation:
 {context}
 
 User Question: {question}
-{feedback_text}
 
 Please provide a comprehensive answer that:
 1. Uses only information from the provided context

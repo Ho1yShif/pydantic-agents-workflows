@@ -134,7 +134,6 @@ class AnswerResponse(BaseModel):
     quality_score: float = Field(..., ge=0, le=100, description="Overall quality score")
     accuracy_score: float = Field(0, ge=0, le=100, description="Technical accuracy score")
     evaluations: list[EvaluationResult] = Field(default_factory=list, description="Evaluator results")
-    iterations: int = Field(1, description="Number of refinement iterations")
     total_cost: float = Field(0.0, description="Total cost in USD")
     total_duration_ms: float = Field(..., description="Total pipeline duration")
     stages: list[PipelineStageResult] = Field(default_factory=list, description="Individual stage results")
