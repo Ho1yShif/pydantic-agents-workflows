@@ -65,8 +65,14 @@ CREATE TABLE documents (
 );
 
 -- Indexes
-CREATE INDEX documents_embedding_idx 
-    ON documents USING ivfflat (embedding vector_cosine_ops);
+-- HNSW (not ivfflat): ivfflat is an approximate index whose default
+-- probes=1 scans only ~1 of `lists` cells per query, so on a small corpus it
+-- frequently misses the true nearest neighbor entirely — claims whose
+-- supporting chunk matched at cosine >0.7 still verified at 0% because the
+-- chunk was never retrieved. HNSW gives effectively exact recall here (and
+-- scales far better) with no probe tuning. Requires pgvector >= 0.5.0.
+CREATE INDEX documents_embedding_hnsw_idx 
+    ON documents USING hnsw (embedding vector_cosine_ops);
 
 CREATE INDEX documents_content_tsv_idx 
     ON documents USING gin(content_tsv);
