@@ -26,7 +26,9 @@ embedder = Embedder(
 
 
 # Number of candidate passages to surface to the entailment judge per claim.
-_CANDIDATE_K = 5
+# 10 (not 5) gives the judge the correctly-retrieved chunk plus a few neighbors;
+# cheap insurance now that the HNSW index actually returns the true nearest matches.
+_CANDIDATE_K = 10
 
 
 VERIFICATION_INSTRUCTIONS = """You verify whether a single factual claim about Render's platform is \

@@ -64,11 +64,20 @@ class VectorStore:
                     )
                 """)
 
-                # Create index for vector similarity search
+                # Create index for vector similarity search.
+                # HNSW, not ivfflat: the old ivfflat (lists=100) index had
+                # catastrophic recall on this corpus — with pgvector's default
+                # ivfflat.probes=1 each query scanned only ~1 of 100 lists
+                # (~1% of rows), so the true #1 nearest neighbor was frequently
+                # never retrieved, leaving claims unverifiable (0% confidence)
+                # even though their supporting chunk matched at cosine >0.7.
+                # HNSW gives effectively exact recall at this scale (and scales
+                # far better) with no probe tuning. Drop the old index first so
+                # existing deployments migrate on their next initialize().
+                await conn.execute("DROP INDEX IF EXISTS documents_embedding_idx")
                 await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS documents_embedding_idx
-                    ON documents USING ivfflat (embedding vector_cosine_ops)
-                    WITH (lists = 100)
+                    CREATE INDEX IF NOT EXISTS documents_embedding_hnsw_idx
+                    ON documents USING hnsw (embedding vector_cosine_ops)
                 """)
 
                 # Create index for source lookups
