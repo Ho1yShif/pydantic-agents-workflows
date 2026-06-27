@@ -1,13 +1,11 @@
 """Stage 4: Claims Extraction."""
 
 from typing import List
-from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIModel as OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
 
 from backend.config import settings, PipelineConfig
 from backend.models import ClaimsOutput
-from backend.observability import instrument_stage, calculate_openai_cost
+from backend.observability import instrument_stage, calculate_openai_cost, usage_and_cost
+from backend.pipeline._agents import openai_agent
 import logfire
 
 
@@ -34,10 +32,8 @@ When in doubt, prefer fewer, higher-quality claims that are concrete Render fact
 Return a JSON object with a "claims" array of claim strings."""
 
 
-_claims_agent = Agent(
-    OpenAIChatModel(settings.claims_model, provider=OpenAIProvider(api_key=settings.openai_api_key)),
-    output_type=ClaimsOutput,
-    instructions=CLAIMS_EXTRACTION_INSTRUCTIONS,
+_claims_agent = openai_agent(
+    settings.claims_model, CLAIMS_EXTRACTION_INSTRUCTIONS, output_type=ClaimsOutput
 )
 
 
@@ -64,10 +60,10 @@ async def extract_claims(answer: str) -> dict:
         model_settings={"temperature": 0.1, "max_tokens": 4000},
     )
 
-    usage = result.usage()
-    input_tokens = usage.request_tokens or 0
-    output_tokens = usage.response_tokens or 0
-    cost_usd = calculate_openai_cost(input_tokens, output_tokens, settings.claims_model)
+    usage = usage_and_cost(result, calculate_openai_cost, settings.claims_model)
+    input_tokens, output_tokens, cost_usd = (
+        usage["input_tokens"], usage["output_tokens"], usage["cost_usd"]
+    )
 
     # Warn if response was near the token limit (possible truncation)
     if output_tokens >= 3900:

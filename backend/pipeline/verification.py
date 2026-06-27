@@ -3,15 +3,15 @@
 import asyncio
 from typing import List
 
-from pydantic_ai import Agent, Embedder, EmbeddingSettings
+from pydantic_ai import Embedder, EmbeddingSettings
 from pydantic_ai.embeddings.openai import OpenAIEmbeddingModel
-from pydantic_ai.models.openai import OpenAIModel as OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from backend.config import settings, PipelineConfig
 from backend.database import vector_store
 from backend.models import Claim, ClaimVerdict
 from backend.observability import instrument_stage, calculate_embedding_cost, calculate_openai_cost
+from backend.pipeline._agents import openai_agent
 import logfire
 
 
@@ -42,10 +42,8 @@ passage states it almost verbatim, ~0.6-0.8 when it is clearly implied, lower wh
 - Use ONLY the provided passages. Do NOT rely on outside knowledge."""
 
 
-_verification_agent = Agent(
-    OpenAIChatModel(settings.claims_model, provider=OpenAIProvider(api_key=settings.openai_api_key)),
-    output_type=ClaimVerdict,
-    instructions=VERIFICATION_INSTRUCTIONS,
+_verification_agent = openai_agent(
+    settings.claims_model, VERIFICATION_INSTRUCTIONS, output_type=ClaimVerdict
 )
 
 

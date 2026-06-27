@@ -118,10 +118,22 @@ class VectorStore:
             
             # Create index for trace_id lookups
             await conn.execute("""
-                CREATE INDEX IF NOT EXISTS qa_sessions_trace_id_idx 
+                CREATE INDEX IF NOT EXISTS qa_sessions_trace_id_idx
                 ON qa_sessions(trace_id)
             """)
-        
+
+            # Live per-stage progress for in-flight pipeline runs. The Workflows
+            # service writes here as it advances through stages; the gateway reads
+            # it while polling so the UI can show real stage-by-stage feedback.
+            # One short-lived row per run, keyed by an opaque progress token.
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS pipeline_progress (
+                    token TEXT PRIMARY KEY,
+                    updates JSONB NOT NULL DEFAULT '[]',
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
         logfire.info("Database initialized successfully")
     
     async def close(self):
@@ -497,7 +509,45 @@ class VectorStore:
             session_id = str(result['id'])
             logfire.info(f"Saved Q&A session: {session_id}", trace_id=trace_id)
             return session_id
-    
+
+    async def record_progress(self, token: str, updates: list[dict]) -> None:
+        """Upsert the live progress for an in-flight run, keyed by ``token``.
+
+        Called by the Workflows orchestrator after each stage. There is a single
+        writer per token (the orchestrator runs its stages sequentially), so we
+        simply rewrite the full cumulative ``updates`` list each time. Stale rows
+        from earlier runs are swept opportunistically so the table stays small.
+        Best-effort: progress reporting must never break the pipeline.
+        """
+        if not self.pool:
+            return
+
+        updates_json = json.dumps(updates)
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO pipeline_progress (token, updates, updated_at)
+                VALUES ($1, $2::jsonb, NOW())
+                ON CONFLICT (token) DO UPDATE
+                SET updates = EXCLUDED.updates, updated_at = NOW()
+            """, token, updates_json)
+            await conn.execute(
+                "DELETE FROM pipeline_progress WHERE updated_at < NOW() - INTERVAL '1 day'"
+            )
+
+    async def get_progress(self, token: str) -> list[dict]:
+        """Return the cumulative progress updates recorded for ``token`` (or [])."""
+        if not self.pool:
+            return []
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT updates FROM pipeline_progress WHERE token = $1", token
+            )
+        if not row or row["updates"] is None:
+            return []
+        updates = row["updates"]
+        return json.loads(updates) if isinstance(updates, str) else updates
+
     async def get_recent_sessions(self, limit: int = 20) -> list[dict]:
         """Get recent Q&A sessions."""
         

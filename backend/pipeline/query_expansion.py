@@ -1,13 +1,11 @@
 """Query expansion for improved retrieval diversity and coverage."""
 
 from typing import List
-from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIModel as OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
 
 from backend.config import settings
 from backend.models import QueryExpansionOutput
-from backend.observability import calculate_openai_cost
+from backend.observability import calculate_openai_cost, usage_and_cost
+from backend.pipeline._agents import openai_agent
 import logfire
 
 
@@ -44,10 +42,8 @@ Input: "What database plans does Render offer?"
 Output: {"queries": ["What are the Postgres instance types and pricing?", "What Key Value datastore plans does Render provide?"]}
 """
 
-_query_expansion_agent = Agent(
-    OpenAIChatModel(settings.query_expansion_model, provider=OpenAIProvider(api_key=settings.openai_api_key)),
-    output_type=QueryExpansionOutput,
-    instructions=QUERY_EXPANSION_INSTRUCTIONS,
+_query_expansion_agent = openai_agent(
+    settings.query_expansion_model, QUERY_EXPANSION_INSTRUCTIONS, output_type=QueryExpansionOutput
 )
 
 
@@ -69,12 +65,9 @@ async def expand_query(question: str) -> tuple[List[str], float]:
         model_settings={"temperature": 0.3, "max_tokens": 300},
     )
 
-    usage = result.usage()
-    cost_usd = calculate_openai_cost(
-        usage.request_tokens or 0,
-        usage.response_tokens or 0,
-        settings.query_expansion_model,
-    )
+    cost_usd = usage_and_cost(
+        result, calculate_openai_cost, settings.query_expansion_model
+    )["cost_usd"]
 
     # Limit to 2 expanded queries, then prepend original to ensure it's always included
     variations = [question] + result.output.queries[:2]

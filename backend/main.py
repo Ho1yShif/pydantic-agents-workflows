@@ -7,6 +7,7 @@ polls it for the result. It also serves health, stats, and session history.
 
 from contextlib import asynccontextmanager
 from functools import lru_cache
+from uuid import uuid4
 
 # Export .env into os.environ before importing the Render SDK. The SDK reads
 # RENDER_USE_LOCAL_DEV (and other SDK-only vars) via os.getenv(), but pydantic-settings
@@ -121,16 +122,24 @@ async def ask_question(request: QuestionRequest):
     ):
         try:
             render = get_render()
+            # Opaque token the workflow writes live per-stage progress under, so the
+            # poll endpoint can surface real stage-by-stage feedback to the UI. The
+            # orchestrator can't discover its own run id, so we correlate by token.
+            progress_token = str(uuid4())
             task_run = await render.workflows.start_task(
                 f"{settings.workflow_slug}/run_qa_pipeline",
-                {"question": request.question, "session_id": request.session_id},
+                {
+                    "question": request.question,
+                    "session_id": request.session_id,
+                    "progress_token": progress_token,
+                },
             )
             logfire.info(
                 "Triggered Q&A workflow run",
                 run_id=task_run.id,
                 session_id=request.session_id or "anonymous",
             )
-            return {"run_id": task_run.id, "status": "pending"}
+            return {"run_id": task_run.id, "progress_token": progress_token, "status": "pending"}
 
         except RenderError as e:
             logfire.error("Failed to trigger workflow run", error=str(e), exc_info=True)
@@ -138,14 +147,24 @@ async def ask_question(request: QuestionRequest):
 
 
 @app.get("/ask/{run_id}", tags=["Q&A"])
-async def get_answer(run_id: str):
+async def get_answer(run_id: str, progress_token: str | None = None):
     """
     Poll a Q&A workflow run.
 
     Returns ``{"status": "running"}`` while in progress, ``{"status": "done",
     "result": <AnswerResponse>}`` on success, or ``{"status": "failed",
-    "error": ...}`` if the run failed.
+    "error": ...}`` if the run failed. When ``progress_token`` is supplied, the
+    cumulative per-stage progress recorded so far is returned as ``updates`` so
+    the UI can show real stage-by-stage feedback while the run is in flight.
     """
+
+    # Live per-stage progress (best-effort — never fail the poll over it).
+    updates: list[dict] = []
+    if progress_token:
+        try:
+            updates = await vector_store.get_progress(progress_token)
+        except Exception as e:  # noqa: BLE001
+            logfire.warning(f"Failed to read progress: {e}")
 
     try:
         details = await get_render().workflows.get_task_run(run_id)
@@ -157,13 +176,13 @@ async def get_answer(run_id: str):
     if status in (TaskRunStatusValues.SUCCEEDED, TaskRunStatusValues.COMPLETED):
         # The orchestrator returns a single AnswerResponse dict; results is a list.
         result = details.results[0] if details.results else None
-        return {"status": "done", "result": result}
+        return {"status": "done", "result": result, "updates": updates}
 
     if status in (TaskRunStatusValues.FAILED, TaskRunStatusValues.CANCELED):
         error = getattr(details, "error", None) or f"Run {status}"
-        return {"status": "failed", "error": str(error)}
+        return {"status": "failed", "error": str(error), "updates": updates}
 
-    return {"status": "running"}
+    return {"status": "running", "updates": updates}
 
 
 @app.get("/stats", tags=["Admin"])

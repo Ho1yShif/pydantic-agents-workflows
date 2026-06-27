@@ -27,8 +27,9 @@ from chunking import chunk_document
 BASE_URL = "https://render.com"
 INDEX_URL = f"{BASE_URL}/tutorials"
 
-# Already curated by add_workflows_tutorial_page.py, which deletes-by-source and
-# reinserts after ingest — crawling it here would just be overwritten.
+# Already curated by the `workflows_tutorial` source (data/sources.py), which
+# deletes-by-source and reinserts after ingest — crawling it here would just be
+# overwritten.
 EXCLUDE_SOURCES: Set[str] = {
     "https://render.com/tutorials/agents-on-render-workflows/what-youll-build",
 }

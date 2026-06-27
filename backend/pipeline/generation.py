@@ -1,13 +1,11 @@
 """Stage 3: Answer Generation."""
 
 from typing import List, Optional
-from pydantic_ai import Agent
-from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from backend.config import settings, PipelineConfig
 from backend.models import Document
-from backend.observability import instrument_stage, calculate_anthropic_cost
+from backend.observability import instrument_stage, calculate_anthropic_cost, usage_and_cost
+from backend.pipeline._agents import anthropic_agent
 import logfire
 
 
@@ -20,10 +18,7 @@ Grounding rules:
 - Keep distinct product types separate. Workspace plans (e.g. Hobby, Professional) are not the same as database/datastore instance types (e.g. Free, Basic, Pro). A "database" or "datastore" question covers both Postgres and Key Value; only attribute a feature to a product when the context shows that product supports it.
 - Don't fabricate tables, lists, or specifications — only structure information that is explicitly in the context."""
 
-_answer_agent = Agent(
-    AnthropicModel(settings.answer_model, provider=AnthropicProvider(api_key=settings.anthropic_api_key)),
-    instructions=ANSWER_GENERATION_INSTRUCTIONS,
-)
+_answer_agent = anthropic_agent(settings.answer_model, ANSWER_GENERATION_INSTRUCTIONS)
 
 
 @instrument_stage(PipelineConfig.STAGE_GENERATION)
@@ -96,10 +91,10 @@ Answer:"""
         model_settings={"temperature": 0.3, "max_tokens": settings.max_tokens},
     )
 
-    usage = result.usage()
-    input_tokens = usage.request_tokens or 0
-    output_tokens = usage.response_tokens or 0
-    cost_usd = calculate_anthropic_cost(input_tokens, output_tokens, settings.answer_model)
+    usage = usage_and_cost(result, calculate_anthropic_cost, settings.answer_model)
+    input_tokens, output_tokens, cost_usd = (
+        usage["input_tokens"], usage["output_tokens"], usage["cost_usd"]
+    )
 
     logfire.info(
         "Answer generated",

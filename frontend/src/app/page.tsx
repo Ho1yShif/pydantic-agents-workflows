@@ -202,7 +202,7 @@ export default function Home() {
             </a>
             <span>•</span>
             <a
-              href="https://github.com/render-examples/logfire-pydantic"
+              href="https://github.com/render-examples/pydantic-agents-workflows"
               target="_blank"
               rel="noopener noreferrer"
               className="hover:text-purple-400 transition-colors flex items-center gap-1"

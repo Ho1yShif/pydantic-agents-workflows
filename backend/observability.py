@@ -166,6 +166,25 @@ def calculate_anthropic_cost(input_tokens: int, output_tokens: int, model: str) 
            (output_tokens / 1_000_000) * price.output_cost_per_m
 
 
+def usage_and_cost(result, cost_fn, model: str) -> dict:
+    """Extract token usage from a pydantic-ai run result and compute its cost.
+
+    Centralizes the request/response-token extraction (with the ``or 0`` guard)
+    plus the cost calculation that every LLM pipeline stage repeats. ``cost_fn``
+    is one of ``calculate_openai_cost`` / ``calculate_anthropic_cost``.
+
+    Returns a dict with ``input_tokens``, ``output_tokens``, ``cost_usd``.
+    """
+    usage = result.usage()
+    input_tokens = usage.request_tokens or 0
+    output_tokens = usage.response_tokens or 0
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cost_usd": cost_fn(input_tokens, output_tokens, model),
+    }
+
+
 def track_pipeline_metrics(
     question: str,
     total_cost: float,

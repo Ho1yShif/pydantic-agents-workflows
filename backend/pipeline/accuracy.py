@@ -6,13 +6,11 @@ emits errors/corrections that feed the refinement loop. Answer style, structure,
 completeness are out of scope here — those are judged by the Quality stage."""
 
 from typing import List
-from pydantic_ai import Agent
-from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from backend.config import settings, PipelineConfig
 from backend.models import Claim, AccuracyOutput
-from backend.observability import instrument_stage, calculate_anthropic_cost
+from backend.observability import instrument_stage, calculate_anthropic_cost, usage_and_cost
+from backend.pipeline._agents import anthropic_agent
 import logfire
 
 
@@ -44,10 +42,8 @@ Return a JSON object with:
 - errors (list of technical errors or inaccuracies found, empty list if none)
 - corrections (list of suggested corrections, empty list if none)"""
 
-_accuracy_agent = Agent(
-    AnthropicModel(settings.accuracy_model, provider=AnthropicProvider(api_key=settings.anthropic_api_key)),
-    output_type=AccuracyOutput,
-    instructions=ACCURACY_CHECK_INSTRUCTIONS,
+_accuracy_agent = anthropic_agent(
+    settings.accuracy_model, ACCURACY_CHECK_INSTRUCTIONS, output_type=AccuracyOutput
 )
 
 
@@ -94,10 +90,10 @@ Evaluate the technical accuracy of this answer."""
         model_settings={"temperature": 0.0, "max_tokens": 1500},
     )
 
-    usage = result.usage()
-    input_tokens = usage.request_tokens or 0
-    output_tokens = usage.response_tokens or 0
-    cost_usd = calculate_anthropic_cost(input_tokens, output_tokens, settings.accuracy_model)
+    usage = usage_and_cost(result, calculate_anthropic_cost, settings.accuracy_model)
+    input_tokens, output_tokens, cost_usd = (
+        usage["input_tokens"], usage["output_tokens"], usage["cost_usd"]
+    )
 
     output = result.output
     accuracy_score = output.accuracy_score
