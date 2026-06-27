@@ -37,7 +37,6 @@ from backend.config import settings
 from backend.database import vector_store
 from backend.ingestion import embed_documents, replace_source
 from backend.models import AnswerResponse, EvaluationResult, PipelineStageResult
-from backend.prices import load_prices
 from backend.pipeline import (
     check_accuracy,
     embed_question,
@@ -71,11 +70,11 @@ app = Workflows(
 async def _ensure_ready(db: bool = False) -> None:
     """Initialize per-instance dependencies a task relies on.
 
-    Each task run is a fresh instance, so model-price data (for cost tracking)
-    and — when needed — the pgvector connection pool must be initialized here
-    rather than assumed from a long-lived process.
+    Each task run is a fresh instance, so the pgvector connection pool must be
+    initialized here rather than assumed from a long-lived process. Model-price
+    data needs no init — it ships bundled with the ``genai-prices`` package and
+    is looked up in-process (no network call).
     """
-    await load_prices()
     if db:
         await vector_store.initialize()
 

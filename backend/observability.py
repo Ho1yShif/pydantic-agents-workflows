@@ -144,26 +144,21 @@ async def pipeline_trace(question: str):
 
 def calculate_embedding_cost(tokens: int) -> float:
     """Calculate cost for embedding API calls."""
-    from backend.prices import get_price
+    from backend.prices import model_cost
     from backend.config import settings
-    price = get_price(settings.embedding_model)
-    return (tokens / 1_000_000) * price.input_cost_per_m
+    return model_cost(tokens, 0, settings.embedding_model, "openai")
 
 
 def calculate_openai_cost(input_tokens: int, output_tokens: int, model: str) -> float:
     """Calculate cost for OpenAI API calls."""
-    from backend.prices import get_price
-    price = get_price(model)
-    return (input_tokens / 1_000_000) * price.input_cost_per_m + \
-           (output_tokens / 1_000_000) * price.output_cost_per_m
+    from backend.prices import model_cost
+    return model_cost(input_tokens, output_tokens, model, "openai")
 
 
 def calculate_anthropic_cost(input_tokens: int, output_tokens: int, model: str) -> float:
     """Calculate cost for Anthropic API calls."""
-    from backend.prices import get_price
-    price = get_price(model)
-    return (input_tokens / 1_000_000) * price.input_cost_per_m + \
-           (output_tokens / 1_000_000) * price.output_cost_per_m
+    from backend.prices import model_cost
+    return model_cost(input_tokens, output_tokens, model, "anthropic")
 
 
 def usage_and_cost(result, cost_fn, model: str) -> dict:
