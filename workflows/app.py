@@ -209,6 +209,7 @@ async def rate_quality_anthropic_task(question: str, answer: str, doc_count: int
 async def run_qa_pipeline(
     question: str,
     session_id: str | None = None,
+    client_id: str | None = None,
     progress_token: str | None = None,
 ) -> dict:
     """Orchestrate the Q&A pipeline as one workflow run.
@@ -428,7 +429,7 @@ async def run_qa_pipeline(
 
         # Persist the session here (the orchestrator already holds all the data
         # and has DB access), so the gateway need not re-receive everything.
-        response.session_id = await _persist_session(response)
+        response.session_id = await _persist_session(response, client_id)
 
         track_pipeline_metrics(
             question=question,
@@ -442,7 +443,7 @@ async def run_qa_pipeline(
         return response.model_dump(mode="json")
 
 
-async def _persist_session(response: AnswerResponse) -> str | None:
+async def _persist_session(response: AnswerResponse, client_id: str | None = None) -> str | None:
     """Save the completed Q&A session to the database."""
     from opentelemetry import trace
 
@@ -462,6 +463,7 @@ async def _persist_session(response: AnswerResponse) -> str | None:
             total_duration_ms=response.total_duration_ms,
             trace_id=trace_id,
             stages=[s.model_dump() for s in response.stages],
+            client_id=client_id,
         )
         logfire.info(f"Saved session to database: {saved_id}", trace_id=trace_id)
         return saved_id

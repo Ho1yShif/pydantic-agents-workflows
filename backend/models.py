@@ -62,6 +62,7 @@ class QuestionRequest(BaseModel):
 
     question: str = Field(..., min_length=10, max_length=500, description="The question to answer")
     session_id: Optional[str] = Field(None, description="Optional session ID for conversation tracking")
+    client_id: Optional[str] = Field(None, description="Anonymous browser client ID used to scope history to this user")
 
     @field_validator('question', mode='before')
     @classmethod
