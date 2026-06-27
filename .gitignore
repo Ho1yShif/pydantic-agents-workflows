@@ -54,6 +54,9 @@ htmlcov/
 # Logs
 *.log
 
+# Claude Code skills
+.claude/skills/
+
 # OS
 .DS_Store
 Thumbs.db
