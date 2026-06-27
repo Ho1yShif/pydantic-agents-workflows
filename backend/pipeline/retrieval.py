@@ -168,43 +168,47 @@ def _parse_metadata(raw) -> dict:
     return raw or {}
 
 
-async def _fetch_curated_doc(conn, lookup: DocLookup) -> Optional[Document]:
-    """Fetch a single curated doc by source or by (pricing-page) title."""
+async def _fetch_curated_docs(conn, lookup: DocLookup) -> List[Document]:
+    """Fetch the curated doc(s) for a lookup — by (pricing-page) title or by source.
+
+    Source-based lookups return ALL rows for the source: curated pages are now
+    chunked into multiple rows, and every chunk should be injected so generation
+    sees the whole page rather than one arbitrary chunk. Title-based (pricing)
+    lookups still resolve to their single table doc.
+    """
     if lookup.title is not None:
-        row = await conn.fetchrow(
+        rows = await conn.fetch(
             """
             SELECT content, source, title, section, metadata
             FROM documents
             WHERE title = $1 AND source = $2
-            LIMIT 1
             """,
             lookup.title, PRICING_SOURCE,
         )
     else:
-        row = await conn.fetchrow(
+        rows = await conn.fetch(
             """
             SELECT content, source, title, section, metadata
             FROM documents
             WHERE source = $1
-            LIMIT 1
             """,
             lookup.source,
         )
 
-    if row is None:
-        return None
-
-    metadata = _parse_metadata(row['metadata'])
-    return Document(
-        content=row['content'],
-        source=row['source'],
-        metadata={
-            'title': row['title'],
-            'section': row['section'] or row['title'],
-            **metadata,
-        },
-        similarity_score=INJECTED_DOC_SCORE,
-    )
+    docs: List[Document] = []
+    for row in rows:
+        metadata = _parse_metadata(row['metadata'])
+        docs.append(Document(
+            content=row['content'],
+            source=row['source'],
+            metadata={
+                'title': row['title'],
+                'section': row['section'] or row['title'],
+                **metadata,
+            },
+            similarity_score=INJECTED_DOC_SCORE,
+        ))
+    return docs
 
 
 def detect_pricing_query(question: str) -> List[str]:
@@ -327,26 +331,28 @@ async def inject_curated_docs(question: str, existing_docs: List[Document]) -> L
             seen_keys.add(key)
             unique_lookups.append(lookup)
 
-    # Don't re-inject a doc already in the retrieved set (match on source + title).
-    existing_keys = {
-        (doc.source, (doc.metadata or {}).get('title'))
-        for doc in existing_docs
-    }
+    # Don't re-inject content already in the retrieved set. Chunks of one curated
+    # page share a title, so dedup on (source, content) rather than (source, title).
+    existing_keys = {(doc.source, doc.content) for doc in existing_docs}
 
     injected: List[Document] = []
+    seen_keys: set = set()
     async with vector_store.pool.acquire() as conn:
         for lookup in unique_lookups:
-            doc = await _fetch_curated_doc(conn, lookup)
-            if doc is None:
+            docs = await _fetch_curated_docs(conn, lookup)
+            if not docs:
                 logfire.warning(
-                    "Curated doc not found in DB — run the matching data/scripts injector",
+                    "Curated doc not found in DB — run the matching ingest_source task",
                     source=lookup.source,
                     title=lookup.title,
                 )
                 continue
-            if (doc.source, doc.metadata.get('title')) in existing_keys:
-                continue
-            injected.append(doc)
+            for doc in docs:
+                key = (doc.source, doc.content)
+                if key in existing_keys or key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                injected.append(doc)
 
     if not injected:
         return existing_docs

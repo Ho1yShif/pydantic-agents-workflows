@@ -27,9 +27,10 @@ from typing import Any, Awaitable, Callable
 import httpx
 from bs4 import BeautifulSoup
 
-# crawl_tutorials lives in data/scripts and imports its sibling `chunking`, so
-# put that directory on the path before importing from it.
+# crawl_tutorials / chunking live in data/scripts, so put that directory on the
+# path before importing from them.
 sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+from chunking import chunk_document  # noqa: E402
 from crawl_tutorials import fetch_tutorial_index  # noqa: E402
 
 Doc = dict[str, Any]
@@ -48,13 +49,18 @@ class Source:
 
 
 # ---------------------------------------------------------------------------
-# Strategy 1: curated page — single doc from data/curated/<name>.md
+# Strategy 1: curated page — chunked docs from data/curated/<name>.md
 # ---------------------------------------------------------------------------
 
 def _curated_build(
-    name: str, title: str, section: str, metadata: dict
+    name: str, source_url: str, title: str, section: str, metadata: dict
 ) -> Callable[[], Awaitable[list[Doc]]]:
-    """Build one doc from the curated markdown file ``data/curated/<name>.md``.
+    """Build chunked docs from the curated markdown file ``data/curated/<name>.md``.
+
+    The content is split with the same ``chunk_document`` utility the bulk corpus
+    and tutorials crawl use, so each fact gets its own focused embedding. (A single
+    monolithic embedding per page made specific claims fail verification — they
+    couldn't surface the whole-page blob in a top-5 similarity search.)
 
     The curated content is hand-structured for semantic retrieval, so (unlike the
     old scripts) we don't make a throwaway live fetch — the result was always
@@ -63,7 +69,15 @@ def _curated_build(
 
     async def build() -> list[Doc]:
         content = (CURATED_DIR / f"{name}.md").read_text(encoding="utf-8")
-        return [{"content": content, "title": title, "section": section, "metadata": metadata}]
+        return [
+            {
+                "content": chunk["content"],
+                "title": chunk["title"],
+                "section": chunk["section"],
+                "metadata": metadata,
+            }
+            for chunk in chunk_document(title, section, source_url, content)
+        ]
 
     return build
 
@@ -254,6 +268,7 @@ SOURCES: dict[str, Source] = {
         source_url="https://render.com/docs/scaling",
         build=_curated_build(
             "autoscaling",
+            source_url="https://render.com/docs/scaling",
             title="Autoscaling on Render",
             section="Scaling and Autoscaling",
             metadata={"type": "docs", "category": "autoscaling", "title": "Autoscaling on Render"},
@@ -264,6 +279,7 @@ SOURCES: dict[str, Source] = {
         source_url="https://render.com/docs/deploy-node-express-app",
         build=_curated_build(
             "nodejs",
+            source_url="https://render.com/docs/deploy-node-express-app",
             title="Deploying a Node.js App on Render",
             section="Node.js Deployment",
             metadata={"type": "docs", "category": "nodejs_deployment", "title": "Deploying a Node.js App on Render"},
@@ -274,6 +290,7 @@ SOURCES: dict[str, Source] = {
         source_url="https://render.com/docs/workflows",
         build=_curated_build(
             "workflows_docs",
+            source_url="https://render.com/docs/workflows",
             title="Render Workflows Documentation",
             section="AI Agent Deployment on Render",
             metadata={"type": "docs", "category": "ai_agent", "title": "Render Workflows Documentation"},
@@ -284,6 +301,7 @@ SOURCES: dict[str, Source] = {
         source_url="https://render.com/tutorials/agents-on-render-workflows/what-youll-build",
         build=_curated_build(
             "workflows_tutorial",
+            source_url="https://render.com/tutorials/agents-on-render-workflows/what-youll-build",
             title="Run AI Agents on Render with Workflows",
             section="AI Agent Deployment on Render",
             metadata={"type": "tutorial", "category": "ai_agent", "title": "Run AI Agents on Render with Workflows"},
