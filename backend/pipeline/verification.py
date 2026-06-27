@@ -165,4 +165,5 @@ async def verify_claims(claims: List[str]) -> dict:
         "verified_claims": verified_claims,
         "verification_rate": verification_rate,
         "cost_usd": cost_usd,
+        "tokens_used": judge_input_tokens + judge_output_tokens,
     }

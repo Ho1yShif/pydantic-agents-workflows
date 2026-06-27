@@ -282,6 +282,11 @@ export default function AnswerDisplay({ answer }: AnswerDisplayProps) {
                     {(source.similarity_score * 100).toFixed(0)}% match
                   </span>
                 </div>
+                {source.metadata.matching_sections > 1 && (
+                  <p className="text-xs text-zinc-500 mb-2">
+                    {source.metadata.matching_sections} matching sections
+                  </p>
+                )}
                 <p className="text-sm text-zinc-300 mb-3 line-clamp-3">
                   {source.content}
                 </p>

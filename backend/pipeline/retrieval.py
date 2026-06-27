@@ -373,6 +373,46 @@ async def inject_curated_docs(question: str, existing_docs: List[Document]) -> L
     return combined
 
 
+def collapse_sources(documents: List[Document]) -> List[Document]:
+    """Collapse retrieved chunks into one source entry per document for display.
+
+    Retrieval and curated injection return *chunks*, and one page is chunked into
+    many rows sharing the same (source, title) — so a flat chunk list shows the same
+    document several times in the UI. This groups chunks by (source, title), keeps the
+    highest-scoring chunk as the representative (its content + similarity_score), and
+    records how many chunks matched in metadata['matching_sections']. The full chunk
+    list still feeds generation/verification; only the user-facing sources view is
+    collapsed.
+
+    Pricing tables intentionally stay separate: they share PRICING_SOURCE but differ
+    by title, so the (source, title) key keeps them as distinct cards.
+    """
+    groups: dict = {}
+    order: List[tuple] = []
+    for doc in documents:
+        title = (doc.metadata or {}).get("title")
+        key = (doc.source, title)
+        if key not in groups:
+            groups[key] = {"best": doc, "count": 1}
+            order.append(key)
+        else:
+            group = groups[key]
+            group["count"] += 1
+            if doc.similarity_score > group["best"].similarity_score:
+                group["best"] = doc
+
+    collapsed: List[Document] = []
+    for key in order:
+        group = groups[key]
+        best = group["best"]
+        merged = best.model_copy(deep=True)
+        merged.metadata = {**(best.metadata or {}), "matching_sections": group["count"]}
+        collapsed.append(merged)
+
+    collapsed.sort(key=lambda doc: doc.similarity_score, reverse=True)
+    return collapsed
+
+
 @instrument_stage(PipelineConfig.STAGE_RETRIEVAL)
 async def retrieve_documents(embedding: List[float], original_question: str = None) -> dict:
     """
