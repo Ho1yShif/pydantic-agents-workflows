@@ -430,6 +430,7 @@ async def retrieve_documents(embedding: List[float], original_question: str = No
     """
 
     total_cost = 0.0001  # Base database query cost
+    queries_count = 1  # Number of query variations actually searched (1 unless expanded)
 
     # Check if we should use multi-query retrieval
     if original_question and await should_expand_query(original_question):
@@ -442,6 +443,7 @@ async def retrieve_documents(embedding: List[float], original_question: str = No
         # Expand query
         query_variations, expansion_cost = await expand_query(original_question)
         total_cost += expansion_cost
+        queries_count = len(query_variations)
 
         logfire.info(
             "Expanded query to multiple variations",
@@ -543,5 +545,6 @@ async def retrieve_documents(embedding: List[float], original_question: str = No
     return {
         "documents": documents,
         "avg_similarity": avg_similarity,
-        "cost_usd": total_cost
+        "cost_usd": total_cost,
+        "queries_count": queries_count,
     }

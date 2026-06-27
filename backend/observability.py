@@ -33,78 +33,66 @@ P = ParamSpec('P')
 R = TypeVar('R')
 
 
+def _record_stage_success(span: LogfireSpan, start_time: float, result: Any) -> None:
+    """Record duration/success on the span, plus cost + token attrs when the stage
+    returned a dict carrying them."""
+    span.set_attribute("duration_ms", (time.time() - start_time) * 1000)
+    span.set_attribute("success", True)
+    if isinstance(result, dict):
+        if "cost_usd" in result:
+            span.set_attribute("cost_usd", result["cost_usd"])
+        if "input_tokens" in result:
+            span.set_attribute("input_tokens", result["input_tokens"])
+        if "output_tokens" in result:
+            span.set_attribute("output_tokens", result["output_tokens"])
+
+
+def _record_stage_failure(span: LogfireSpan, start_time: float, stage_name: str, exc: Exception) -> None:
+    """Record failure attributes on the span and log the error."""
+    span.set_attribute("duration_ms", (time.time() - start_time) * 1000)
+    span.set_attribute("success", False)
+    span.set_attribute("error", str(exc))
+    logfire.error(f"Stage {stage_name} failed: {exc}")
+
+
 def instrument_stage(stage_name: str):
-    """Decorator to instrument a pipeline stage with Logfire."""
-    
+    """Decorator to instrument a pipeline stage with Logfire.
+
+    Picks an async or sync wrapper based on the wrapped function; both share the
+    same span lifecycle via _record_stage_success / _record_stage_failure, so the
+    only difference between them is the await.
+    """
+    import inspect
+
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
         @wraps(func)
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            with logfire.span(
-                stage_name
-            ) as span:
+            with logfire.span(stage_name) as span:
                 span.set_attribute("span_type", "pipeline_stage")
                 start_time = time.time()
-                
                 try:
                     result = await func(*args, **kwargs)
-                    
-                    duration_ms = (time.time() - start_time) * 1000
-                    span.set_attribute("duration_ms", duration_ms)
-                    span.set_attribute("success", True)
-                    
-                    # Add cost if available
-                    if isinstance(result, dict) and "cost_usd" in result:
-                        span.set_attribute("cost_usd", result["cost_usd"])
-                    
-                    # Add token usage if available
-                    if isinstance(result, dict):
-                        if "input_tokens" in result:
-                            span.set_attribute("input_tokens", result["input_tokens"])
-                        if "output_tokens" in result:
-                            span.set_attribute("output_tokens", result["output_tokens"])
-                    
+                    _record_stage_success(span, start_time, result)
                     return result
-                    
                 except Exception as e:
-                    duration_ms = (time.time() - start_time) * 1000
-                    span.set_attribute("duration_ms", duration_ms)
-                    span.set_attribute("success", False)
-                    span.set_attribute("error", str(e))
-                    logfire.error(f"Stage {stage_name} failed: {e}")
+                    _record_stage_failure(span, start_time, stage_name, e)
                     raise
-        
+
         @wraps(func)
         def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            with logfire.span(
-                stage_name
-            ) as span:
+            with logfire.span(stage_name) as span:
                 span.set_attribute("span_type", "pipeline_stage")
                 start_time = time.time()
-                
                 try:
                     result = func(*args, **kwargs)
-                    
-                    duration_ms = (time.time() - start_time) * 1000
-                    span.set_attribute("duration_ms", duration_ms)
-                    span.set_attribute("success", True)
-                    
+                    _record_stage_success(span, start_time, result)
                     return result
-                    
                 except Exception as e:
-                    duration_ms = (time.time() - start_time) * 1000
-                    span.set_attribute("duration_ms", duration_ms)
-                    span.set_attribute("success", False)
-                    span.set_attribute("error", str(e))
-                    logfire.error(f"Stage {stage_name} failed: {e}")
+                    _record_stage_failure(span, start_time, stage_name, e)
                     raise
-        
-        # Return appropriate wrapper based on function type
-        import inspect
-        if inspect.iscoroutinefunction(func):
-            return async_wrapper  # type: ignore
-        else:
-            return sync_wrapper  # type: ignore
-    
+
+        return async_wrapper if inspect.iscoroutinefunction(func) else sync_wrapper  # type: ignore
+
     return decorator
 
 

@@ -1,5 +1,6 @@
 """API endpoint for fetching Logfire logs."""
 
+import re
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -8,9 +9,10 @@ import logfire
 
 from backend.config import settings
 
-# How far back to scope the query. The trace_id WHERE clause already pins the
-# results to one trace; this window just needs to comfortably contain it.
-LOGFIRE_QUERY_WINDOW_DAYS = 7
+# An OpenTelemetry trace ID is a 32-char lowercase hex string (see _persist_session,
+# which formats it with "032x"). We validate against this before interpolating it
+# into the Logfire SQL — defense-in-depth, since the value is DB-sourced, not user input.
+_TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
 async def fetch_logfire_logs(trace_id: str) -> dict:
@@ -31,7 +33,10 @@ async def fetch_logfire_logs(trace_id: str) -> dict:
             status_code=501,
             detail="Logfire read token not configured. Set LOGFIRE_READ_TOKEN environment variable."
         )
-    
+
+    if not _TRACE_ID_RE.match(trace_id):
+        raise HTTPException(status_code=400, detail="Invalid trace ID format")
+
     # SQL query to fetch all records for this trace.
     # Logfire stores spans and logs in the 'records' table.
     # See: https://pydantic.dev/docs/logfire/manage/query-api/
@@ -55,7 +60,7 @@ async def fetch_logfire_logs(trace_id: str) -> dict:
     # The Query API requires min_timestamp and applies its own row limit
     # (default 100), independent of the SQL LIMIT.
     min_timestamp = (
-        datetime.now(timezone.utc) - timedelta(days=LOGFIRE_QUERY_WINDOW_DAYS)
+        datetime.now(timezone.utc) - timedelta(days=settings.logfire_query_window_days)
     ).isoformat()
     body = {
         "sql": query,

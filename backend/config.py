@@ -1,6 +1,18 @@
 """Configuration settings for the Ask Render Anything Assistant."""
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+# Max embedding dimensions supported per OpenAI model. Used to reject an
+# embedding_model/embedding_dimensions mismatch at startup (a wrong pairing
+# otherwise surfaces only as opaque API errors at query time). Unknown models
+# pass through so new models work without a config change.
+KNOWN_EMBEDDING_DIMS = {
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+}
 
 
 class Settings(BaseSettings):
@@ -19,6 +31,10 @@ class Settings(BaseSettings):
     logfire_read_token: str = ""  # Optional: for fetching logs via API
     # Logfire Query API base URL. Use https://logfire-eu.pydantic.dev for EU-region projects.
     logfire_api_base: str = "https://logfire-us.pydantic.dev"
+    # How far back the session-logs query scopes its time window. The trace_id WHERE
+    # clause already pins results to one trace; this window just needs to comfortably
+    # contain it. 30 (not 7) so logs stay fetchable for sessions older than a week.
+    logfire_query_window_days: int = 30
     
     # Database
     database_url: str
@@ -60,6 +76,17 @@ class Settings(BaseSettings):
     
     # CORS
     cors_origins: list[str] = ["*"]
+
+    @model_validator(mode="after")
+    def _validate_embedding_dimensions(self) -> "Settings":
+        """Reject an embedding_dimensions value the configured model can't produce."""
+        max_dims = KNOWN_EMBEDDING_DIMS.get(self.embedding_model)
+        if max_dims is not None and not (0 < self.embedding_dimensions <= max_dims):
+            raise ValueError(
+                f"embedding_dimensions={self.embedding_dimensions} is invalid for "
+                f"embedding_model='{self.embedding_model}' (must be 1..{max_dims})"
+            )
+        return self
 
 
 class PipelineConfig:
