@@ -1,15 +1,10 @@
 # Reusable environment variable groups.
 #
 # `pydantic-agents-workflows-pipeline` is the single source of truth for the Q&A pipeline config
-# (LLM/Logfire secrets + thresholds + model selection). It is consumed by the
-# API gateway below AND linked to the Render Workflows service (created in the
-# Dashboard — Blueprints don't yet support Workflows). Both run the same
-# `backend.config.Settings`, so they must see identical config; linking one
-# group beats hand-pasting ~20 vars into the Dashboard.
-#
-# `pydantic-agents-workflows-pipeline-trigger` holds the creds the gateway + ingest cron need to trigger
-# and poll workflow runs. Set WORKFLOW_SLUG once after the Workflows service
-# exists and both services inherit it.
+# (LLM/Logfire secrets + thresholds + model selection). It is consumed by both the
+# API service and the ingest cron below — both run the same `backend.config.Settings`,
+# so they must see identical config; linking one group beats hand-pasting ~20 vars
+# into the Dashboard.
 envVarGroups:
   - name: pydantic-agents-workflows-pipeline
     envVars:
@@ -57,13 +52,6 @@ envVarGroups:
       - key: LOG_LEVEL
         value: INFO
 
-  - name: pydantic-agents-workflows-pipeline-trigger
-    envVars:
-      - key: RENDER_API_KEY
-        sync: false
-      - key: WORKFLOW_SLUG
-        sync: false
-
 projects:
   - name: pydantic-agents-workflows
     environments:
@@ -79,10 +67,9 @@ projects:
 
         # Services in the production environment
         services:
-          # Backend API gateway (FastAPI + Logfire).
-          # The Q&A pipeline + ingestion run in a separate Render Workflows
-          # service (created in the Dashboard — Blueprints don't yet support
-          # Workflows). This gateway triggers and polls workflow runs.
+          # Backend API service (FastAPI + Logfire).
+          # The Q&A pipeline runs in-process: POST /ask launches it as a
+          # background task and GET /ask/{run_id} polls for progress + result.
           - type: web
             name: pydantic-agents-workflows-api
             runtime: python
@@ -91,24 +78,22 @@ projects:
             buildCommand: uv sync --no-dev --frozen
             startCommand: uv run uvicorn backend.main:app --host 0.0.0.0 --port $PORT
             # Refresh live RAG sources on every deploy via the consolidated,
-            # data-driven ingest entrypoint (no Render Workflows). Ingests all
-            # sources in data/sources.py: pricing, autoscaling, nodejs,
-            # workflows_docs, workflows_tutorial, tutorials_index.
+            # data-driven ingest entrypoint. Ingests all sources in
+            # data/sources.py: pricing, autoscaling, nodejs, workflows_docs,
+            # workflows_tutorial, tutorials_index.
             preDeployCommand: uv run python data/scripts/ingest_pages.py
             healthCheckPath: /health
             envVars:
-              # Shared pipeline config + secrets (also linked to the Workflows service)
+              # Shared pipeline config + secrets
               - fromGroup: pydantic-agents-workflows-pipeline
-              # Workflow trigger creds (shared with the ingest cron)
-              - fromGroup: pydantic-agents-workflows-pipeline-trigger
               # Database connection (auto-injected from database)
               - key: DATABASE_URL
                 fromDatabase:
                   name: pydantic-agents-workflows-db
                   property: connectionString
 
-          # Ingestion refresh cron — triggers the Workflow's `ingest_all`
-          # fan-out on a schedule (Workflows have no built-in scheduling).
+          # Ingestion refresh cron — re-ingests all live RAG sources on a
+          # schedule by running the same data-driven entrypoint as pre-deploy.
           - type: cron
             name: pydantic-agents-workflows-ingest
             runtime: python
@@ -116,10 +101,15 @@ projects:
             region: oregon
             schedule: "0 6 * * *"  # daily at 06:00 UTC
             buildCommand: uv sync --no-dev --frozen
-            startCommand: uv run python workflows/trigger_ingest.py
+            startCommand: uv run python data/scripts/ingest_pages.py
             envVars:
-              # Only needs the trigger creds (RENDER_API_KEY + WORKFLOW_SLUG)
-              - fromGroup: pydantic-agents-workflows-pipeline-trigger
+              # Pipeline config + secrets (needs OPENAI_API_KEY for embeddings)
+              - fromGroup: pydantic-agents-workflows-pipeline
+              # Database connection (auto-injected from database)
+              - key: DATABASE_URL
+                fromDatabase:
+                  name: pydantic-agents-workflows-db
+                  property: connectionString
 
           # Frontend (Next.js Static Site)
           - type: web

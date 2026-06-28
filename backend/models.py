@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 import html
 
@@ -138,7 +138,7 @@ class AnswerResponse(BaseModel):
     total_cost: float = Field(0.0, description="Total cost in USD")
     total_duration_ms: float = Field(..., description="Total pipeline duration")
     stages: list[PipelineStageResult] = Field(default_factory=list, description="Individual stage results")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Response timestamp")
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Response timestamp")
     session_id: Optional[str] = Field(None, description="Session ID if provided")
 
 
@@ -159,7 +159,7 @@ class HealthCheck(BaseModel):
     status: str = Field(..., description="Service status")
     database_connected: bool = Field(..., description="Database connection status")
     logfire_enabled: bool = Field(..., description="Logfire instrumentation status")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class DocumentChunk(BaseModel):

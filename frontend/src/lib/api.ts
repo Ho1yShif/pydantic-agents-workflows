@@ -38,13 +38,14 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /**
- * Ask a question via the Workflows-backed pipeline.
+ * Ask a question via the in-process pipeline.
  *
- * The gateway triggers a Render Workflow run and we poll it for the result.
- * The pipeline runs out-of-band in the Workflow service, so token-by-token
- * answer streaming is unavailable (`onAnswerToken` is unused). The orchestrator
- * records real per-stage progress under a token, which we poll alongside the
- * run status and replay through `onProgress` as each new stage lands.
+ * POST /ask starts the pipeline as a background task and returns a run id; we
+ * poll GET /ask/{run_id} for the result. The pipeline runs out-of-band from the
+ * polling request, so token-by-token answer streaming is unavailable
+ * (`onAnswerToken` is unused). The orchestrator records real per-stage progress
+ * under a token, which we poll alongside the run status and replay through
+ * `onProgress` as each new stage lands.
  */
 export async function askQuestion(
   question: string,
@@ -52,7 +53,7 @@ export async function askQuestion(
   _onAnswerToken?: (delta: string) => void,
   signal?: AbortSignal
 ): Promise<AnswerResponse> {
-  // 1. Trigger the workflow run.
+  // 1. Start the pipeline run.
   const startResponse = await fetch(`${API_BASE_URL}/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
