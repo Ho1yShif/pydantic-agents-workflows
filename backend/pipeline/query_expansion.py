@@ -60,10 +60,21 @@ async def expand_query(question: str) -> tuple[List[str], float]:
 
     logfire.info("Expanding query with LLM", original_question=question)
 
-    result = await _query_expansion_agent.run(
-        f"Original question: {question}",
-        model_settings={"temperature": 0.3, "max_tokens": 300},
-    )
+    try:
+        result = await _query_expansion_agent.run(
+            f"Original question: {question}",
+            model_settings={"temperature": 0.3, "max_tokens": 1000},
+        )
+    except Exception:
+        # Query expansion is a retrieval enhancement, not a hard requirement. If the
+        # agent fails (e.g. token-limit truncation or a transient provider error), fall
+        # back to the original question alone so the Q&A pipeline still answers.
+        logfire.warning(
+            "Query expansion failed; falling back to original question only",
+            original_question=question,
+            exc_info=True,
+        )
+        return [question], 0.0
 
     cost_usd = usage_and_cost(
         result, calculate_openai_cost, settings.query_expansion_model
