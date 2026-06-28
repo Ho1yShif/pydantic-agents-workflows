@@ -4,6 +4,25 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 const POLL_INTERVAL_MS = 1500
 
+const CLIENT_ID_KEY = 'client_id'
+
+/**
+ * Stable anonymous identifier for this browser, used to scope Q&A history to
+ * the current user (the app has no auth). Generated once and persisted in
+ * localStorage; resets if the user clears storage or switches devices.
+ */
+export function getClientId(): string {
+  // SSR / non-browser: no stable storage, so return a throwaway id.
+  if (typeof window === 'undefined') return 'ssr'
+
+  let clientId = window.localStorage.getItem(CLIENT_ID_KEY)
+  if (!clientId) {
+    clientId = crypto.randomUUID()
+    window.localStorage.setItem(CLIENT_ID_KEY, clientId)
+  }
+  return clientId
+}
+
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(resolve, ms)
@@ -37,7 +56,7 @@ export async function askQuestion(
   const startResponse = await fetch(`${API_BASE_URL}/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, client_id: getClientId() }),
     signal,
   })
 
@@ -115,7 +134,9 @@ export interface HistorySession {
 }
 
 export async function getHistory(limit: number = 20): Promise<HistorySession[]> {
-  const response = await fetch(`${API_BASE_URL}/history?limit=${limit}`)
+  const response = await fetch(
+    `${API_BASE_URL}/history?limit=${limit}&client_id=${encodeURIComponent(getClientId())}`
+  )
   
   if (!response.ok) {
     throw new Error(`Failed to fetch history: ${response.statusText}`)
@@ -126,7 +147,9 @@ export async function getHistory(limit: number = 20): Promise<HistorySession[]> 
 }
 
 export async function getSession(sessionId: string): Promise<HistorySession> {
-  const response = await fetch(`${API_BASE_URL}/history/${sessionId}`)
+  const response = await fetch(
+    `${API_BASE_URL}/history/${sessionId}?client_id=${encodeURIComponent(getClientId())}`
+  )
   
   if (!response.ok) {
     throw new Error(`Failed to fetch session: ${response.statusText}`)
@@ -136,9 +159,12 @@ export async function getSession(sessionId: string): Promise<HistorySession> {
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/history/${sessionId}`, {
-    method: 'DELETE',
-  })
+  const response = await fetch(
+    `${API_BASE_URL}/history/${sessionId}?client_id=${encodeURIComponent(getClientId())}`,
+    {
+      method: 'DELETE',
+    }
+  )
   
   if (!response.ok) {
     throw new Error(`Failed to delete session: ${response.statusText}`)
@@ -146,9 +172,12 @@ export async function deleteSession(sessionId: string): Promise<void> {
 }
 
 export async function clearAllHistory(): Promise<{ count: number }> {
-  const response = await fetch(`${API_BASE_URL}/history`, {
-    method: 'DELETE',
-  })
+  const response = await fetch(
+    `${API_BASE_URL}/history?client_id=${encodeURIComponent(getClientId())}`,
+    {
+      method: 'DELETE',
+    }
+  )
   
   if (!response.ok) {
     throw new Error(`Failed to clear history: ${response.statusText}`)

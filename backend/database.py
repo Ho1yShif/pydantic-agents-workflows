@@ -130,6 +130,7 @@ class VectorStore:
                         total_duration_ms FLOAT NOT NULL,
                         trace_id TEXT,
                         stages JSONB DEFAULT '[]',
+                        client_id TEXT,
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
@@ -141,10 +142,24 @@ class VectorStore:
                     "ALTER TABLE qa_sessions DROP COLUMN IF EXISTS iterations"
                 )
 
+                # Migration: history is now scoped per anonymous browser client.
+                # Add the owner column to pre-existing deployments (idempotent).
+                # Legacy rows keep NULL client_id and are naturally excluded from
+                # any client's history, since history queries filter by equality.
+                await conn.execute(
+                    "ALTER TABLE qa_sessions ADD COLUMN IF NOT EXISTS client_id TEXT"
+                )
+
                 # Create index for recent sessions
                 await conn.execute("""
                     CREATE INDEX IF NOT EXISTS qa_sessions_created_at_idx
                     ON qa_sessions(created_at DESC)
+                """)
+
+                # Composite index for the per-client recent-sessions query
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS qa_sessions_client_created_idx
+                    ON qa_sessions(client_id, created_at DESC)
                 """)
 
                 # Create index for trace_id lookups
@@ -513,28 +528,30 @@ class VectorStore:
         total_cost: float,
         total_duration_ms: float,
         trace_id: Optional[str] = None,
-        stages: Optional[list] = None
+        stages: Optional[list] = None,
+        client_id: Optional[str] = None
     ) -> str:
         """Save a Q&A session to the database."""
-        
+
         if not self.pool:
             raise RuntimeError("Database pool not initialized")
-        
+
         # Convert lists to JSON strings for JSONB columns
         sources_json = json.dumps(sources)
         claims_json = json.dumps(claims)
         evaluations_json = json.dumps(evaluations)
         stages_json = json.dumps(stages or [])
-        
+
         async with self.pool.acquire() as conn:
             result = await conn.fetchrow("""
                 INSERT INTO qa_sessions
                 (question, answer, sources, claims, evaluations, quality_score,
-                 total_cost, total_duration_ms, trace_id, stages)
-                VALUES ($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10::jsonb)
+                 total_cost, total_duration_ms, trace_id, stages, client_id)
+                VALUES ($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10::jsonb, $11)
                 RETURNING id
             """, question, answer, sources_json, claims_json, evaluations_json,
-                quality_score, total_cost, total_duration_ms, trace_id, stages_json)
+                quality_score, total_cost, total_duration_ms, trace_id, stages_json,
+                client_id)
             
             session_id = str(result['id'])
             logfire.info(f"Saved Q&A session: {session_id}", trace_id=trace_id)
@@ -578,22 +595,27 @@ class VectorStore:
         updates = row["updates"]
         return json.loads(updates) if isinstance(updates, str) else updates
 
-    async def get_recent_sessions(self, limit: int = 20) -> list[dict]:
-        """Get recent Q&A sessions."""
-        
+    async def get_recent_sessions(self, client_id: str, limit: int = 20) -> list[dict]:
+        """Get recent Q&A sessions for a given browser client.
+
+        Filters by ``client_id`` equality, so legacy rows with a NULL owner are
+        never returned to anyone.
+        """
+
         if not self.pool:
             raise RuntimeError("Database pool not initialized")
-        
+
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
-                SELECT 
+                SELECT
                     id, question, answer, sources, claims, evaluations,
                     quality_score, total_cost, total_duration_ms,
                     created_at, trace_id, stages
                 FROM qa_sessions
+                WHERE client_id = $1
                 ORDER BY created_at DESC
-                LIMIT $1
-            """, limit)
+                LIMIT $2
+            """, client_id, limit)
             
             sessions = []
             for row in rows:
@@ -647,38 +669,44 @@ class VectorStore:
             
             return session
     
-    async def delete_session(self, session_id: str) -> bool:
-        """Delete a specific Q&A session by ID."""
-        
+    async def delete_session(self, session_id: str, client_id: str) -> bool:
+        """Delete a specific Q&A session by ID, scoped to its owning client.
+
+        A session that exists but belongs to another client is treated as
+        not-deleted (the caller surfaces this as a 404).
+        """
+
         if not self.pool:
             raise RuntimeError("Database pool not initialized")
-        
+
         async with self.pool.acquire() as conn:
             result = await conn.execute("""
                 DELETE FROM qa_sessions
-                WHERE id = $1
-            """, session_id)
-            
+                WHERE id = $1 AND client_id = $2
+            """, session_id, client_id)
+
             # Check if any row was deleted
             deleted = result.split()[-1] != '0'
-            
+
             if deleted:
                 logfire.info(f"Deleted session: {session_id}")
-            
+
             return deleted
-    
-    async def delete_all_sessions(self) -> int:
-        """Delete all Q&A sessions."""
-        
+
+    async def delete_all_sessions(self, client_id: str) -> int:
+        """Delete all Q&A sessions owned by the given client."""
+
         if not self.pool:
             raise RuntimeError("Database pool not initialized")
-        
+
         async with self.pool.acquire() as conn:
-            result = await conn.execute("DELETE FROM qa_sessions")
+            result = await conn.execute(
+                "DELETE FROM qa_sessions WHERE client_id = $1", client_id
+            )
             deleted_count = int(result.split()[-1])
-            
-            logfire.info(f"Deleted all sessions: {deleted_count} total")
-            
+
+            logfire.info(f"Deleted all sessions for client: {deleted_count} total")
+
             return deleted_count
 
 

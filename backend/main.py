@@ -117,6 +117,7 @@ async def ask_question(request: QuestionRequest):
     with logfire.span(
         "user_session.qa_request",
         session_id=request.session_id or "anonymous",
+        client_id=request.client_id or "anonymous",
         question=request.question[:100],
         question_length=len(request.question),
     ):
@@ -131,6 +132,7 @@ async def ask_question(request: QuestionRequest):
                 {
                     "question": request.question,
                     "session_id": request.session_id,
+                    "client_id": request.client_id,
                     "progress_token": progress_token,
                 },
             )
@@ -200,18 +202,22 @@ async def get_stats():
 
 
 @app.get("/history", tags=["Q&A"])
-async def get_history(limit: int = 20):
+async def get_history(client_id: str, limit: int = 20):
     """
-    Get recent Q&A sessions.
+    Get recent Q&A sessions for the calling browser client.
 
     Args:
+        client_id: Anonymous browser client ID to scope history to.
         limit: Maximum number of sessions to return (default: 20, max: 100)
     """
+
+    if not client_id:
+        raise HTTPException(status_code=400, detail="client_id is required")
 
     if limit > 100:
         raise HTTPException(status_code=400, detail="Limit cannot exceed 100")
 
-    sessions = await vector_store.get_recent_sessions(limit=limit)
+    sessions = await vector_store.get_recent_sessions(client_id=client_id, limit=limit)
 
     return {
         "sessions": sessions,
@@ -237,15 +243,19 @@ async def get_session(session_id: str):
 
 
 @app.delete("/history/{session_id}", tags=["Q&A"])
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, client_id: str):
     """
-    Delete a specific Q&A session by ID.
+    Delete a specific Q&A session by ID, scoped to the calling client.
 
     Args:
         session_id: The UUID of the session to delete
+        client_id: Anonymous browser client ID that must own the session
     """
 
-    deleted = await vector_store.delete_session(session_id)
+    if not client_id:
+        raise HTTPException(status_code=400, detail="client_id is required")
+
+    deleted = await vector_store.delete_session(session_id, client_id)
 
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -258,14 +268,20 @@ async def delete_session(session_id: str):
 
 
 @app.delete("/history", tags=["Q&A"])
-async def clear_all_history():
+async def clear_all_history(client_id: str):
     """
-    Delete all Q&A sessions from history.
+    Delete all Q&A sessions owned by the calling client.
 
     This action cannot be undone.
+
+    Args:
+        client_id: Anonymous browser client ID whose history is cleared
     """
 
-    deleted_count = await vector_store.delete_all_sessions()
+    if not client_id:
+        raise HTTPException(status_code=400, detail="client_id is required")
+
+    deleted_count = await vector_store.delete_all_sessions(client_id)
 
     return {
         "success": True,
