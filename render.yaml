@@ -90,6 +90,11 @@ projects:
             region: oregon
             buildCommand: uv sync --no-dev --frozen
             startCommand: uv run uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+            # Refresh live RAG sources on every deploy via the consolidated,
+            # data-driven ingest entrypoint (no Render Workflows). Ingests all
+            # sources in data/sources.py: pricing, autoscaling, nodejs,
+            # workflows_docs, workflows_tutorial, tutorials_index.
+            preDeployCommand: uv run python data/scripts/ingest_pages.py
             healthCheckPath: /health
             envVars:
               # Shared pipeline config + secrets (also linked to the Workflows service)
